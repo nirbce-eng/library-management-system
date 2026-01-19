@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  library-app:
+    build: .
+    container_name: library-management-system
+    ports:
+      - "3000:5000"
+    volumes:
+      - library-data:/app/data
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=production
+    restart: unless-stopped
+
+volumes:
+  library-data:
+    driver: local

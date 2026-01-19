@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Library Management System{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="page-header">
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-subtitle">Overview of your library operations</p>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card stat-primary">
+            <div class="stat-icon">📖</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ total_books }}</div>
+                <div class="stat-label">Total Books</div>
+            </div>
+        </div>
+
+        <div class="stat-card stat-success">
+            <div class="stat-icon">👥</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ total_members }}</div>
+                <div class="stat-label">Active Members</div>
+            </div>
+        </div>
+
+        <div class="stat-card stat-info">
+            <div class="stat-icon">📤</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ issued_books }}</div>
+                <div class="stat-label">Issued Books</div>
+            </div>
+        </div>
+
+        <div class="stat-card stat-warning">
+            <div class="stat-icon">⏰</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ overdue_books }}</div>
+                <div class="stat-label">Overdue Books</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-section">
+        <div class="section-header">
+            <h2 class="section-title">Recent Transactions</h2>
+            <a href="{{ url_for('transactions') }}" class="btn btn-ghost">View All →</a>
+        </div>
+
+        {% if recent_transactions %}
+        <div class="table-container">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Book Title</th>
+                        <th>Member Name</th>
+                        <th>Issue Date</th>
+                        <th>Due Date</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for transaction in recent_transactions %}
+                    <tr>
+                        <td><span class="mono">#{{ transaction.id }}</span></td>
+                        <td>{{ transaction.title }}</td>
+                        <td>{{ transaction.name }}</td>
+                        <td>{{ transaction.issue_date }}</td>
+                        <td>{{ transaction.due_date }}</td>
+                        <td>
+                            <span class="status-badge status-{{ transaction.status }}">
+                                {{ transaction.status }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-icon">📭</div>
+            <p class="empty-text">No recent transactions</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="quick-actions">
+        <h2 class="section-title">Quick Actions</h2>
+        <div class="action-grid">
+            <a href="{{ url_for('add_book') }}" class="action-card">
+                <div class="action-icon">➕</div>
+                <div class="action-label">Add New Book</div>
+            </a>
+            <a href="{{ url_for('add_member') }}" class="action-card">
+                <div class="action-icon">👤</div>
+                <div class="action-label">Register Member</div>
+            </a>
+            <a href="{{ url_for('issue_book') }}" class="action-card">
+                <div class="action-icon">📤</div>
+                <div class="action-label">Issue Book</div>
+            </a>
+            <a href="{{ url_for('transactions') }}" class="action-card">
+                <div class="action-icon">📊</div>
+                <div class="action-label">View Transactions</div>
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

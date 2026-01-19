@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Book - Library Management System{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1 class="page-title">Edit Book</h1>
+        <p class="page-subtitle">Update book information</p>
+    </div>
+
+    <div class="form-container">
+        <form method="post" class="form">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="title" class="form-label">Title *</label>
+                    <input type="text" id="title" name="title" class="form-input" value="{{ book.title }}" required>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="author" class="form-label">Author *</label>
+                    <input type="text" id="author" name="author" class="form-input" value="{{ book.author }}" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="isbn" class="form-label">ISBN *</label>
+                    <input type="text" id="isbn" name="isbn" class="form-input" value="{{ book.isbn }}" required>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="publisher" class="form-label">Publisher</label>
+                    <input type="text" id="publisher" name="publisher" class="form-input" value="{{ book.publisher or '' }}">
+                </div>
+                
+                <div class="form-group">
+                    <label for="publication_year" class="form-label">Publication Year</label>
+                    <input type="number" id="publication_year" name="publication_year" class="form-input" 
+                           value="{{ book.publication_year or '' }}" min="1800" max="2026">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="category" class="form-label">Category</label>
+                    <input type="text" id="category" name="category" class="form-input" value="{{ book.category or '' }}">
+                </div>
+                
+                <div class="form-group">
+                    <label for="total_copies" class="form-label">Total Copies *</label>
+                    <input type="number" id="total_copies" name="total_copies" class="form-input" 
+                           value="{{ book.total_copies }}" min="1" required>
+                    <small class="form-hint">Currently issued: {{ book.total_copies - book.available_copies }}</small>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <a href="{{ url_for('books') }}" class="btn btn-ghost">Cancel</a>
+                <button type="submit" class="btn btn-primary">Update Book</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

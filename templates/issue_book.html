@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Issue Book - Library Management System{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1 class="page-title">Issue Book</h1>
+        <p class="page-subtitle">Loan a book to a member</p>
+    </div>
+
+    <div class="form-container">
+        <form method="post" class="form">
+            <div class="form-row">
+                <div class="form-group full-width">
+                    <label for="book_id" class="form-label">Select Book *</label>
+                    <select id="book_id" name="book_id" class="form-input" required>
+                        <option value="">-- Choose a book --</option>
+                        {% for book in books %}
+                        <option value="{{ book.id }}">
+                            {{ book.title }} by {{ book.author }} ({{ book.available_copies }} available)
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group full-width">
+                    <label for="member_id" class="form-label">Select Member *</label>
+                    <select id="member_id" name="member_id" class="form-input" required>
+                        <option value="">-- Choose a member --</option>
+                        {% for member in members %}
+                        <option value="{{ member.id }}">{{ member.name }} ({{ member.email }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="issue_date" class="form-label">Issue Date *</label>
+                    <input type="date" id="issue_date" name="issue_date" class="form-input" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="due_days" class="form-label">Loan Period (Days) *</label>
+                    <input type="number" id="due_days" name="due_days" class="form-input" 
+                           value="14" min="1" max="90" required>
+                    <small class="form-hint">Default: 14 days</small>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <strong>📋 Note:</strong> The due date will be automatically calculated based on the issue date and loan period.
+            </div>
+
+            <div class="form-actions">
+                <a href="{{ url_for('transactions') }}" class="btn btn-ghost">Cancel</a>
+                <button type="submit" class="btn btn-primary">Issue Book</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Set default issue date to today
+    document.getElementById('issue_date').valueAsDate = new Date();
+</script>
+{% endblock %}

@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Transactions - Library Management System{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Transactions</h1>
+            <p class="page-subtitle">Track book borrowing and returns</p>
+        </div>
+        <a href="{{ url_for('issue_book') }}" class="btn btn-primary">+ Issue Book</a>
+    </div>
+
+    <div class="filters-section">
+        <form method="get" class="filter-form">
+            <select name="status" class="filter-select" onchange="this.form.submit()">
+                <option value="">All Transactions</option>
+                <option value="issued" {% if selected_status == 'issued' %}selected{% endif %}>Currently Issued</option>
+                <option value="returned" {% if selected_status == 'returned' %}selected{% endif %}>Returned</option>
+            </select>
+        </form>
+    </div>
+
+    {% if transactions %}
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Book</th>
+                    <th>Member</th>
+                    <th>Issue Date</th>
+                    <th>Due Date</th>
+                    <th>Return Date</th>
+                    <th>Fine</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for transaction in transactions %}
+                <tr>
+                    <td><span class="mono">#{{ transaction.id }}</span></td>
+                    <td>
+                        <strong>{{ transaction.title }}</strong>
+                        <small class="text-muted">by {{ transaction.author }}</small>
+                    </td>
+                    <td>{{ transaction.member_name }}</td>
+                    <td>{{ transaction.issue_date }}</td>
+                    <td>{{ transaction.due_date }}</td>
+                    <td>{{ transaction.return_date or '-' }}</td>
+                    <td>
+                        {% if transaction.fine_amount > 0 %}
+                        <span class="fine-amount">${{ "%.2f"|format(transaction.fine_amount) }}</span>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="status-badge status-{{ transaction.status }}">
+                            {{ transaction.status }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if transaction.status == 'issued' %}
+                        <button class="btn-icon" onclick="openReturnModal({{ transaction.id }})" title="Return Book">📥</button>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">📊</div>
+        <p class="empty-text">No transactions found</p>
+        <a href="{{ url_for('issue_book') }}" class="btn btn-primary">Issue Your First Book</a>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Return Book Modal -->
+<div id="returnModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title">Return Book</h3>
+            <span class="modal-close" onclick="closeReturnModal()">&times;</span>
+        </div>
+        <form id="returnForm" method="post">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="return_date" class="form-label">Return Date *</label>
+                    <input type="date" id="return_date" name="return_date" class="form-input" required>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeReturnModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Process Return</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Set default return date to today
+    document.getElementById('return_date').valueAsDate = new Date();
+
+    function openReturnModal(transactionId) {
+        const modal = document.getElementById('returnModal');
+        const form = document.getElementById('returnForm');
+        form.action = `/transactions/return/${transactionId}`;
+        modal.style.display = 'flex';
+    }
+
+    function closeReturnModal() {
+        document.getElementById('returnModal').style.display = 'none';
+    }
+
+    // Close modal on outside click
+    window.onclick = function(event) {
+        const modal = document.getElementById('returnModal');
+        if (event.target == modal) {
+            closeReturnModal();
+        }
+    }
+</script>
+{% endblock %}
