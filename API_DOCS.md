@@ -1,30 +1,81 @@
-# 📡 API Documentation
+# API Documentation
 
 API endpoints for the Library Management System.
 
 ## Base URL
-```
-http://localhost:5000
-```
+
+**Local Development:** `http://localhost:5000`
+**Docker:** `http://localhost:3000`
 
 ## Authentication
-Currently, no authentication is required. For production, implement JWT or session-based authentication.
 
-## API Endpoints
+All routes except `/login`, `/register`, and `/forgot-password` require authentication via session cookies.
 
-### Books API
+### Login
+```http
+POST /login
+Content-Type: application/x-www-form-urlencoded
 
-#### Search Books
+username=admin&password=admin123
+```
+
+**Response:** Redirects to dashboard on success, returns to login page with error on failure.
+
+### Logout
+```http
+GET /logout
+```
+
+**Response:** Redirects to login page, clears session.
+
+### Register New User
+```http
+POST /register
+Content-Type: application/x-www-form-urlencoded
+
+username=newuser&email=user@example.com&password=password123&confirm_password=password123
+```
+
+**Validation:**
+- Username: 3-20 characters, alphanumeric and underscore
+- Password: minimum 6 characters
+- Email: valid email format, unique
+
+### Change Password (Authenticated)
+```http
+POST /change-password
+Content-Type: application/x-www-form-urlencoded
+
+current_password=oldpass&new_password=newpass&confirm_password=newpass
+```
+
+### Forgot Password
+```http
+POST /forgot-password
+Content-Type: application/x-www-form-urlencoded
+
+username=admin&email=admin@library.com&new_password=newpass&confirm_password=newpass
+```
+
+---
+
+## JSON API Endpoints
+
+### Search Books
 Search for available books by title, author, or ISBN.
 
-**Endpoint:** `GET /api/books/search`
+```http
+GET /api/books/search?q={query}
+```
 
 **Parameters:**
-- `q` (required): Search query string
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| q | string | Yes | Search query |
 
 **Example Request:**
-```http
-GET /api/books/search?q=python
+```bash
+curl "http://localhost:5000/api/books/search?q=python"
 ```
 
 **Example Response:**
@@ -36,41 +87,32 @@ GET /api/books/search?q=python
         "author": "John Doe",
         "isbn": "978-0-123456-78-9",
         "available_copies": 3
-    },
-    {
-        "id": 2,
-        "title": "Learning Python",
-        "author": "Jane Smith",
-        "isbn": "978-0-987654-32-1",
-        "available_copies": 1
     }
 ]
 ```
 
-**Status Codes:**
-- `200 OK`: Success
-- `400 Bad Request`: Missing query parameter
-
 **Notes:**
-- Only returns books with `available_copies > 0`
-- Maximum 10 results returned
+- Returns only books with `available_copies > 0`
+- Maximum 10 results
 - Case-insensitive search
 
 ---
 
-### Members API
-
-#### Search Members
+### Search Members
 Search for active members by name or email.
 
-**Endpoint:** `GET /api/members/search`
+```http
+GET /api/members/search?q={query}
+```
 
 **Parameters:**
-- `q` (required): Search query string
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| q | string | Yes | Search query |
 
 **Example Request:**
-```http
-GET /api/members/search?q=john
+```bash
+curl "http://localhost:5000/api/members/search?q=john"
 ```
 
 **Example Response:**
@@ -80,178 +122,108 @@ GET /api/members/search?q=john
         "id": 1,
         "name": "John Doe",
         "email": "john.doe@example.com"
-    },
-    {
-        "id": 5,
-        "name": "Johnny Smith",
-        "email": "johnny@example.com"
     }
 ]
 ```
 
-**Status Codes:**
-- `200 OK`: Success
-- `400 Bad Request`: Missing query parameter
-
 **Notes:**
-- Only returns members with `status = 'active'`
-- Maximum 10 results returned
+- Returns only members with `status = 'active'`
+- Maximum 10 results
 - Case-insensitive search
 
 ---
 
-## Web Routes (For Reference)
+## Web Routes Reference
 
 ### Dashboard
-```
-GET /
-```
-Returns dashboard with library statistics.
-
----
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/` | Dashboard with statistics |
 
 ### Books Management
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/books` | List all books |
+| GET | `/books?search=query` | Search books |
+| GET | `/books?category=Fiction` | Filter by category |
+| GET | `/books/add` | Add book form |
+| POST | `/books/add` | Create book |
+| GET | `/books/edit/<id>` | Edit book form |
+| POST | `/books/edit/<id>` | Update book |
+| POST | `/books/delete/<id>` | Delete book |
 
-#### List Books
+**Add/Edit Book Form Fields:**
 ```
-GET /books?search=<query>&category=<category>
+title (required)
+author (required)
+isbn (required, unique)
+publisher (optional)
+publication_year (optional)
+category (optional)
+total_copies (required, default: 1)
 ```
-**Query Parameters:**
-- `search`: Search by title, author, or ISBN
-- `category`: Filter by book category
-
-#### Add Book
-```
-GET  /books/add      # Show form
-POST /books/add      # Submit form
-```
-**Form Fields:**
-- `title` (required)
-- `author` (required)
-- `isbn` (required, unique)
-- `publisher` (optional)
-- `publication_year` (optional)
-- `category` (optional)
-- `total_copies` (required, default: 1)
-
-#### Edit Book
-```
-GET  /books/edit/<int:book_id>
-POST /books/edit/<int:book_id>
-```
-
-#### Delete Book
-```
-POST /books/delete/<int:book_id>
-```
-**Note:** Cannot delete books with active transactions.
-
----
 
 ### Members Management
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/members` | List all members |
+| GET | `/members?search=query` | Search members |
+| GET | `/members?status=active` | Filter by status |
+| GET | `/members/add` | Add member form |
+| POST | `/members/add` | Create member |
+| GET | `/members/edit/<id>` | Edit member form |
+| POST | `/members/edit/<id>` | Update member |
+| POST | `/members/delete/<id>` | Delete member |
 
-#### List Members
+**Add/Edit Member Form Fields:**
 ```
-GET /members?search=<query>&status=<status>
+name (required)
+email (required, unique)
+phone (optional)
+address (optional)
+status (edit only: active/inactive)
 ```
-**Query Parameters:**
-- `search`: Search by name, email, or phone
-- `status`: Filter by member status (active/inactive)
-
-#### Add Member
-```
-GET  /members/add
-POST /members/add
-```
-**Form Fields:**
-- `name` (required)
-- `email` (required, unique)
-- `phone` (optional)
-- `address` (optional)
-
-#### Edit Member
-```
-GET  /members/edit/<int:member_id>
-POST /members/edit/<int:member_id>
-```
-
-#### Delete Member
-```
-POST /members/delete/<int:member_id>
-```
-**Note:** Cannot delete members with active transactions.
-
----
 
 ### Transactions Management
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/transactions` | List all transactions |
+| GET | `/transactions?status=issued` | Filter by status |
+| GET | `/transactions/issue` | Issue book form |
+| POST | `/transactions/issue` | Issue a book |
+| POST | `/transactions/return/<id>` | Return a book |
 
-#### List Transactions
+**Issue Book Form Fields:**
 ```
-GET /transactions?status=<status>
+book_id (required)
+member_id (required)
+issue_date (required)
+due_days (required, default: 14)
 ```
-**Query Parameters:**
-- `status`: Filter by transaction status (issued/returned)
 
-#### Issue Book
+**Return Book Form Fields:**
 ```
-GET  /transactions/issue
-POST /transactions/issue
+return_date (required)
 ```
-**Form Fields:**
-- `book_id` (required)
-- `member_id` (required)
-- `issue_date` (required)
-- `due_days` (required, default: 14)
-
-**Validation:**
-- Book must have available copies
-- Member must be active
-- Due date calculated automatically
-
-#### Return Book
-```
-POST /transactions/return/<int:transaction_id>
-```
-**Form Fields:**
-- `return_date` (required)
 
 **Fine Calculation:**
-- Overdue days = return_date - due_date
-- Fine = overdue_days * $1.00 per day
+- If `return_date > due_date`: fine = overdue_days * $1.00
 
 ---
 
-## Error Handling
+## Database Schema
 
-### Success Response
-```json
-{
-    "success": true,
-    "message": "Operation completed successfully",
-    "data": {}
-}
+### Users Table
+```sql
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    role TEXT DEFAULT 'staff',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
 ```
-
-### Error Response
-```json
-{
-    "success": false,
-    "error": "Error message",
-    "code": "ERROR_CODE"
-}
-```
-
-### Common Error Codes
-- `BOOK_NOT_AVAILABLE`: Book has no available copies
-- `DUPLICATE_ISBN`: Book with ISBN already exists
-- `DUPLICATE_EMAIL`: Member with email already exists
-- `ACTIVE_TRANSACTIONS`: Cannot delete with active transactions
-- `NOT_FOUND`: Resource not found
-- `VALIDATION_ERROR`: Invalid input data
-
----
-
-## Database Schema Reference
 
 ### Books Table
 ```sql
@@ -302,26 +274,35 @@ CREATE TABLE transactions (
 
 ---
 
-## Usage Examples
+## Code Examples
 
 ### Python (requests)
 ```python
 import requests
 
-# Search for books
-response = requests.get('http://localhost:5000/api/books/search', 
+# Create session for authentication
+session = requests.Session()
+
+# Login
+login_data = {'username': 'admin', 'password': 'admin123'}
+session.post('http://localhost:5000/login', data=login_data)
+
+# Search books
+response = session.get('http://localhost:5000/api/books/search',
                        params={'q': 'python'})
 books = response.json()
+print(books)
 
-# Search for members
-response = requests.get('http://localhost:5000/api/members/search',
+# Search members
+response = session.get('http://localhost:5000/api/members/search',
                        params={'q': 'john'})
 members = response.json()
+print(members)
 ```
 
 ### JavaScript (fetch)
 ```javascript
-// Search for books
+// Search for books (requires authenticated session)
 fetch('/api/books/search?q=python')
     .then(response => response.json())
     .then(books => console.log(books))
@@ -336,88 +317,79 @@ fetch('/api/members/search?q=john')
 
 ### cURL
 ```bash
-# Search for books
-curl "http://localhost:5000/api/books/search?q=python"
+# Login and save cookies
+curl -c cookies.txt -d "username=admin&password=admin123" \
+     http://localhost:5000/login
 
-# Search for members
-curl "http://localhost:5000/api/members/search?q=john"
+# Search books with session
+curl -b cookies.txt "http://localhost:5000/api/books/search?q=python"
+
+# Search members
+curl -b cookies.txt "http://localhost:5000/api/members/search?q=john"
 ```
 
 ---
 
-## Rate Limiting
-Currently, no rate limiting is implemented. For production:
-- Implement rate limiting (e.g., 100 requests per minute)
-- Use Flask-Limiter or similar middleware
-- Return `429 Too Many Requests` when limit exceeded
+## Error Handling
 
-## Security Considerations
+### Flash Messages
+The application uses Flask flash messages for user feedback:
 
-### For Production Deployment:
+| Category | Description |
+|----------|-------------|
+| success | Operation completed successfully |
+| error | Operation failed |
+| warning | Warning (e.g., overdue fine) |
 
-1. **Authentication**
-   - Implement JWT tokens
-   - Use OAuth 2.0
-   - Session-based authentication
+### Common Errors
 
-2. **Authorization**
-   - Role-based access control (Admin, Librarian, Member)
-   - Permission checks for sensitive operations
+| Error | Cause | Solution |
+|-------|-------|----------|
+| Redirect to login | Session expired | Login again |
+| "ISBN already exists" | Duplicate ISBN | Use unique ISBN |
+| "Email already exists" | Duplicate email | Use unique email |
+| "Cannot delete" | Active transactions | Return books first |
+| "Book not available" | No copies available | Wait for return |
 
-3. **Input Validation**
-   - Sanitize all inputs
-   - Validate data types
-   - Check for SQL injection
-
-4. **HTTPS**
-   - Use SSL/TLS certificates
-   - Redirect HTTP to HTTPS
-   - Secure cookies
-
-5. **CORS**
-   - Configure allowed origins
-   - Restrict methods
-   - Set proper headers
+---
 
 ## Extending the API
 
-### Adding New Endpoints
-
-Example: Get book by ID
+### Adding a New Endpoint
 ```python
 @app.route('/api/books/<int:book_id>')
+@login_required
 def get_book(book_id):
     with get_db() as conn:
         cursor = conn.cursor()
         book = cursor.execute(
-            'SELECT * FROM books WHERE id = ?', 
+            'SELECT * FROM books WHERE id = ?',
             (book_id,)
         ).fetchone()
-        
+
         if book:
             return jsonify(dict(book))
-        else:
-            return jsonify({'error': 'Book not found'}), 404
+        return jsonify({'error': 'Book not found'}), 404
 ```
 
 ### Adding Pagination
-
 ```python
 @app.route('/api/books')
+@login_required
 def list_books():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
     offset = (page - 1) * per_page
-    
+
     with get_db() as conn:
         cursor = conn.cursor()
         books = cursor.execute(
             'SELECT * FROM books LIMIT ? OFFSET ?',
             (per_page, offset)
         ).fetchall()
-        
+
         total = cursor.execute('SELECT COUNT(*) FROM books').fetchone()[0]
-        
+
         return jsonify({
             'books': [dict(book) for book in books],
             'page': page,
@@ -429,47 +401,18 @@ def list_books():
 
 ---
 
-## Testing the API
+## Security Notes
 
-### Using Postman
+For production deployment:
 
-1. Import collection
-2. Set base URL variable
-3. Test each endpoint
-4. Validate responses
-
-### Using Python unittest
-
-```python
-import unittest
-import json
-from app import app
-
-class APITestCase(unittest.TestCase):
-    def setUp(self):
-        self.app = app.test_client()
-        
-    def test_search_books(self):
-        response = self.app.get('/api/books/search?q=python')
-        self.assertEqual(response.status_code, 200)
-        data = json.loads(response.data)
-        self.assertIsInstance(data, list)
-        
-if __name__ == '__main__':
-    unittest.main()
-```
+1. **Use HTTPS** - Enable SSL/TLS
+2. **Change Secret Key** - Generate secure random key
+3. **Rate Limiting** - Implement request throttling
+4. **Input Validation** - Sanitize all user inputs
+5. **CORS** - Configure allowed origins
+6. **Session Security** - Set secure cookie flags
 
 ---
 
-## Support & Questions
-
-For API support:
-1. Check this documentation
-2. Review the source code in `app.py`
-3. Test with sample data
-4. Submit issues on GitHub
-
----
-
-**API Version:** 1.0  
-**Last Updated:** January 15, 2026
+**API Version:** 1.1
+**Last Updated:** January 21, 2026
