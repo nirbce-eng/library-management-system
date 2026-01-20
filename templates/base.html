@@ -6,6 +6,128 @@
     <title>{% block title %}Library Management System{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        .nav-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .nav-user {
+            position: relative;
+            margin-left: auto;
+        }
+        .user-dropdown {
+            position: relative;
+        }
+        .user-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            color: #fff;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: 'Outfit', sans-serif;
+            font-size: 14px;
+        }
+        .user-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .user-name {
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .dropdown-arrow {
+            font-size: 10px;
+            opacity: 0.6;
+            transition: transform 0.2s;
+        }
+        .user-dropdown:hover .dropdown-arrow {
+            transform: rotate(180deg);
+        }
+        .dropdown-menu {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            min-width: 200px;
+            background: #1e1e2e;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-10px);
+            transition: all 0.2s;
+            z-index: 1000;
+            overflow: hidden;
+        }
+        .user-dropdown:hover .dropdown-menu {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        .dropdown-header {
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+        .dropdown-user {
+            display: block;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+        .dropdown-role {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .dropdown-divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            color: #ccc;
+            text-decoration: none;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+        .dropdown-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+        }
+        .dropdown-item span {
+            font-size: 16px;
+        }
+        .dropdown-item-danger {
+            color: #f87171;
+        }
+        .dropdown-item-danger:hover {
+            background: rgba(239, 68, 68, 0.1);
+            color: #f87171;
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar">
@@ -20,6 +142,29 @@
                 <li><a href="{{ url_for('members') }}" class="nav-link {% if request.endpoint in ['members', 'add_member', 'edit_member'] %}active{% endif %}">Members</a></li>
                 <li><a href="{{ url_for('transactions') }}" class="nav-link {% if request.endpoint in ['transactions', 'issue_book'] %}active{% endif %}">Transactions</a></li>
             </ul>
+            <div class="nav-user">
+                <div class="user-dropdown">
+                    <button class="user-btn">
+                        <span class="user-avatar">{{ session.get('username', 'U')[0]|upper }}</span>
+                        <span class="user-name">{{ session.get('username', 'User') }}</span>
+                        <span class="dropdown-arrow">▼</span>
+                    </button>
+                    <div class="dropdown-menu">
+                        <div class="dropdown-header">
+                            <span class="dropdown-user">{{ session.get('username', 'User') }}</span>
+                            <span class="dropdown-role">{{ session.get('role', 'staff')|title }}</span>
+                        </div>
+                        <div class="dropdown-divider"></div>
+                        <a href="{{ url_for('change_password') }}" class="dropdown-item">
+                            <span>🔑</span> Change Password
+                        </a>
+                        <div class="dropdown-divider"></div>
+                        <a href="{{ url_for('logout') }}" class="dropdown-item dropdown-item-danger">
+                            <span>🚪</span> Logout
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
     </nav>
 

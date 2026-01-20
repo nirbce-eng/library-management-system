@@ -8,6 +8,7 @@ services:
       - "3000:5000"
     volumes:
       - library-data:/app/data
+      - library-logs:/app/logs
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=production
@@ -15,4 +16,6 @@ services:
 
 volumes:
   library-data:
+    driver: local
+  library-logs:
     driver: local
