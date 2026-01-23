@@ -13,6 +13,7 @@ from logging.handlers import RotatingFileHandler
 import time
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
+import secrets
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-in-production'
@@ -197,6 +198,17 @@ def init_db():
             )
         ''')
 
+        # API tokens table for mobile app authentication
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+
         # Create default admin user if not exists
         cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', ('admin',))
         if cursor.fetchone()[0] == 0:
@@ -209,11 +221,35 @@ def init_db():
         conn.commit()
         logger.info("Database initialization complete")
 
-# Authentication decorator
+# Authentication decorator for web routes
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # Check for API token first (for mobile apps)
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            with get_db() as conn:
+                cursor = conn.cursor()
+                token_record = cursor.execute('''
+                    SELECT t.user_id, u.username, u.role
+                    FROM api_tokens t
+                    JOIN users u ON t.user_id = u.id
+                    WHERE t.token = ?
+                ''', (token,)).fetchone()
+
+                if token_record:
+                    # Set session data for the request
+                    session['user_id'] = token_record['user_id']
+                    session['username'] = token_record['username']
+                    session['role'] = token_record['role']
+                    return f(*args, **kwargs)
+
+        # Fall back to session-based auth
         if 'user_id' not in session:
+            # For API requests, return JSON error
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Unauthorized'}), 401
             flash('Please log in to access this page.', 'error')
             return redirect(url_for('login'))
         return f(*args, **kwargs)
@@ -772,7 +808,7 @@ def return_book(transaction_id):
 # Authentication APIs
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
-    """API endpoint for user login"""
+    """API endpoint for user login - returns API token for mobile apps"""
     data = request.get_json()
 
     if not data or 'username' not in data or 'password' not in data:
@@ -788,14 +824,30 @@ def api_login():
         ).fetchone()
 
         if user and check_password_hash(user['password_hash'], password):
+            # Generate API token for mobile app
+            api_token = secrets.token_hex(32)
+
+            # Delete old tokens for this user (optional: keep only one active token)
+            cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
+
+            # Store the new token
+            cursor.execute('''
+                INSERT INTO api_tokens (user_id, token)
+                VALUES (?, ?)
+            ''', (user['id'], api_token))
+            conn.commit()
+
+            # Also set session for web compatibility
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['role'] = user['role']
+
             audit_logger.info(f"API_LOGIN: username='{username}'")
 
             return jsonify({
                 'success': True,
                 'message': 'Login successful',
+                'token': api_token,  # Mobile app uses this token
                 'user': {
                     'id': user['id'],
                     'username': user['username'],
