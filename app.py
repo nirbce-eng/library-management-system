@@ -765,7 +765,89 @@ def return_book(transaction_id):
     return redirect(url_for('transactions'))
 
 # API endpoints
+@app.route('/api/dashboard')
+@login_required
+def api_dashboard():
+    """API endpoint for dashboard statistics"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        stats = {
+            'total_books': cursor.execute('SELECT COUNT(*) FROM books').fetchone()[0],
+            'total_members': cursor.execute('SELECT COUNT(*) FROM members WHERE status="active"').fetchone()[0],
+            'issued_books': cursor.execute('SELECT COUNT(*) FROM transactions WHERE status="issued"').fetchone()[0],
+            'overdue_books': cursor.execute('''
+                SELECT COUNT(*) FROM transactions
+                WHERE status="issued" AND due_date < date('now')
+            ''').fetchone()[0]
+        }
+
+        return jsonify(stats)
+
+@app.route('/api/books')
+@login_required
+def api_list_books():
+    """API endpoint to list all books"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    search = request.args.get('search', '')
+    category = request.args.get('category', '')
+
+    offset = (page - 1) * per_page
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        query = 'SELECT * FROM books WHERE 1=1'
+        params = []
+
+        if search:
+            query += ' AND (title LIKE ? OR author LIKE ? OR isbn LIKE ?)'
+            params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
+
+        if category:
+            query += ' AND category = ?'
+            params.append(category)
+
+        query += ' ORDER BY title LIMIT ? OFFSET ?'
+        params.extend([per_page, offset])
+
+        books = cursor.execute(query, params).fetchall()
+
+        # Get total count
+        count_query = 'SELECT COUNT(*) FROM books WHERE 1=1'
+        count_params = []
+        if search:
+            count_query += ' AND (title LIKE ? OR author LIKE ? OR isbn LIKE ?)'
+            count_params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
+        if category:
+            count_query += ' AND category = ?'
+            count_params.append(category)
+
+        total = cursor.execute(count_query, count_params).fetchone()[0]
+
+        return jsonify({
+            'books': [dict(book) for book in books],
+            'page': page,
+            'per_page': per_page,
+            'total': total,
+            'pages': (total + per_page - 1) // per_page
+        })
+
+@app.route('/api/books/<int:book_id>')
+@login_required
+def api_get_book(book_id):
+    """API endpoint to get a single book"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        book = cursor.execute('SELECT * FROM books WHERE id = ?', (book_id,)).fetchone()
+
+        if book:
+            return jsonify(dict(book))
+        return jsonify({'error': 'Book not found'}), 404
+
 @app.route('/api/books/search')
+@login_required
 def api_search_books():
     """API endpoint to search books"""
     search = request.args.get('q', '')
@@ -773,14 +855,77 @@ def api_search_books():
         cursor = conn.cursor()
         books = cursor.execute('''
             SELECT id, title, author, isbn, available_copies
-            FROM books 
+            FROM books
             WHERE (title LIKE ? OR author LIKE ? OR isbn LIKE ?) AND available_copies > 0
             LIMIT 10
         ''', (f'%{search}%', f'%{search}%', f'%{search}%')).fetchall()
-        
+
         return jsonify([dict(book) for book in books])
 
+@app.route('/api/members')
+@login_required
+def api_list_members():
+    """API endpoint to list all members"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    search = request.args.get('search', '')
+    status = request.args.get('status', '')
+
+    offset = (page - 1) * per_page
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        query = 'SELECT * FROM members WHERE 1=1'
+        params = []
+
+        if search:
+            query += ' AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)'
+            params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
+
+        if status:
+            query += ' AND status = ?'
+            params.append(status)
+
+        query += ' ORDER BY name LIMIT ? OFFSET ?'
+        params.extend([per_page, offset])
+
+        members = cursor.execute(query, params).fetchall()
+
+        # Get total count
+        count_query = 'SELECT COUNT(*) FROM members WHERE 1=1'
+        count_params = []
+        if search:
+            count_query += ' AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)'
+            count_params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
+        if status:
+            count_query += ' AND status = ?'
+            count_params.append(status)
+
+        total = cursor.execute(count_query, count_params).fetchone()[0]
+
+        return jsonify({
+            'members': [dict(member) for member in members],
+            'page': page,
+            'per_page': per_page,
+            'total': total,
+            'pages': (total + per_page - 1) // per_page
+        })
+
+@app.route('/api/members/<int:member_id>')
+@login_required
+def api_get_member(member_id):
+    """API endpoint to get a single member"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        member = cursor.execute('SELECT * FROM members WHERE id = ?', (member_id,)).fetchone()
+
+        if member:
+            return jsonify(dict(member))
+        return jsonify({'error': 'Member not found'}), 404
+
 @app.route('/api/members/search')
+@login_required
 def api_search_members():
     """API endpoint to search members"""
     search = request.args.get('q', '')
@@ -788,12 +933,78 @@ def api_search_members():
         cursor = conn.cursor()
         members = cursor.execute('''
             SELECT id, name, email
-            FROM members 
+            FROM members
             WHERE (name LIKE ? OR email LIKE ?) AND status = 'active'
             LIMIT 10
         ''', (f'%{search}%', f'%{search}%')).fetchall()
-        
+
         return jsonify([dict(member) for member in members])
+
+@app.route('/api/transactions')
+@login_required
+def api_list_transactions():
+    """API endpoint to list all transactions"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    status = request.args.get('status', '')
+
+    offset = (page - 1) * per_page
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        query = '''
+            SELECT t.*, b.title, b.author, m.name as member_name
+            FROM transactions t
+            JOIN books b ON t.book_id = b.id
+            JOIN members m ON t.member_id = m.id
+            WHERE 1=1
+        '''
+        params = []
+
+        if status:
+            query += ' AND t.status = ?'
+            params.append(status)
+
+        query += ' ORDER BY t.created_at DESC LIMIT ? OFFSET ?'
+        params.extend([per_page, offset])
+
+        transactions = cursor.execute(query, params).fetchall()
+
+        # Get total count
+        count_query = 'SELECT COUNT(*) FROM transactions WHERE 1=1'
+        count_params = []
+        if status:
+            count_query += ' AND status = ?'
+            count_params.append(status)
+
+        total = cursor.execute(count_query, count_params).fetchone()[0]
+
+        return jsonify({
+            'transactions': [dict(t) for t in transactions],
+            'page': page,
+            'per_page': per_page,
+            'total': total,
+            'pages': (total + per_page - 1) // per_page
+        })
+
+@app.route('/api/transactions/<int:transaction_id>')
+@login_required
+def api_get_transaction(transaction_id):
+    """API endpoint to get a single transaction"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        transaction = cursor.execute('''
+            SELECT t.*, b.title, b.author, m.name as member_name
+            FROM transactions t
+            JOIN books b ON t.book_id = b.id
+            JOIN members m ON t.member_id = m.id
+            WHERE t.id = ?
+        ''', (transaction_id,)).fetchone()
+
+        if transaction:
+            return jsonify(dict(transaction))
+        return jsonify({'error': 'Transaction not found'}), 404
 
 if __name__ == '__main__':
     logger.info("Starting Library Management System...")
