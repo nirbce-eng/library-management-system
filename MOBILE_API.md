@@ -6,7 +6,15 @@ Complete REST API endpoints for mobile application integration.
 
 ## Authentication
 
-All endpoints except `/api/auth/login` and `/api/auth/register` require authentication via session cookies.
+All endpoints except `/api/auth/login` and `/api/auth/register` require authentication.
+
+### Token-Based Authentication (Recommended for Mobile)
+
+After login, include the token in the `Authorization` header for all subsequent requests:
+
+```http
+Authorization: Bearer <your_api_token>
+```
 
 ### Login
 ```http
@@ -24,6 +32,7 @@ Content-Type: application/json
 {
   "success": true,
   "message": "Login successful",
+  "token": "a1b2c3d4e5f6...",
   "user": {
     "id": 1,
     "username": "admin",
@@ -508,6 +517,152 @@ Content-Type: application/json
 
 ---
 
+## Admin Chat (Admin Only)
+
+Chat endpoints are restricted to users with `role: "admin"`. Requires Bearer token authentication.
+
+### Get Admin Users
+Get list of admin users available for chat (excludes current user).
+
+```http
+GET /api/chat/admins
+Authorization: Bearer <token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "admins": [
+    {
+      "id": 2,
+      "username": "admin2",
+      "email": "admin2@library.com"
+    }
+  ]
+}
+```
+
+### Get Conversations
+Get list of conversations with last message preview and unread count.
+
+```http
+GET /api/chat/conversations
+Authorization: Bearer <token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "conversations": [
+    {
+      "user_id": 2,
+      "username": "admin2",
+      "email": "admin2@library.com",
+      "last_message": "Hello, how are you?",
+      "last_message_time": "2026-01-23 10:30:00",
+      "last_sender_id": 2,
+      "unread_count": 3
+    }
+  ]
+}
+```
+
+### Get Messages
+Get all messages between current user and specified user. Automatically marks received messages as read.
+
+```http
+GET /api/chat/messages/<user_id>
+Authorization: Bearer <token>
+```
+
+**Optional Query Parameters:**
+- `since` - ISO timestamp to get only messages after this time (for polling)
+
+**Example with polling:**
+```http
+GET /api/chat/messages/2?since=2026-01-23T10:30:00
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "other_user": {
+    "id": 2,
+    "username": "admin2",
+    "role": "admin"
+  },
+  "messages": [
+    {
+      "id": 1,
+      "sender_id": 1,
+      "receiver_id": 2,
+      "message": "Hi there!",
+      "is_read": 1,
+      "created_at": "2026-01-23 10:00:00"
+    },
+    {
+      "id": 2,
+      "sender_id": 2,
+      "receiver_id": 1,
+      "message": "Hello, how are you?",
+      "is_read": 1,
+      "created_at": "2026-01-23 10:30:00"
+    }
+  ],
+  "current_user_id": 1
+}
+```
+
+### Send Message
+Send a message to another admin user.
+
+```http
+POST /api/chat/messages
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "receiver_id": 2,
+  "message": "Hello from mobile app!"
+}
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "message": {
+    "id": 3,
+    "sender_id": 1,
+    "receiver_id": 2,
+    "message": "Hello from mobile app!",
+    "is_read": 0,
+    "created_at": "2026-01-23 11:00:00"
+  }
+}
+```
+
+### Get Unread Count
+Get total unread message count for current user.
+
+```http
+GET /api/chat/unread-count
+Authorization: Bearer <token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "unread_count": 5
+}
+```
+
+---
+
 ## Error Responses
 
 ### 400 Bad Request
@@ -521,6 +676,13 @@ Content-Type: application/json
 ```json
 {
   "error": "Invalid username or password"
+}
+```
+
+### 403 Forbidden (Admin Required)
+```json
+{
+  "error": "Admin access required"
 }
 ```
 
@@ -548,6 +710,7 @@ Content-Type: application/json
 | 201 | Created - Resource created |
 | 400 | Bad Request - Invalid input |
 | 401 | Unauthorized - Authentication required |
+| 403 | Forbidden - Admin access required |
 | 404 | Not Found - Resource not found |
 | 409 | Conflict - Duplicate or constraint violation |
 
@@ -586,9 +749,16 @@ Content-Type: application/json
 - ✓ POST `/api/transactions/issue` - Issue book
 - ✓ POST `/api/transactions/<id>/return` - Return book
 
-**Total: 24 API endpoints**
+### Admin Chat (5 endpoints) - Admin Only
+- ✓ GET `/api/chat/admins` - List admin users
+- ✓ GET `/api/chat/conversations` - Get conversations
+- ✓ GET `/api/chat/messages/<user_id>` - Get messages with user
+- ✓ POST `/api/chat/messages` - Send message
+- ✓ GET `/api/chat/unread-count` - Get unread count
+
+**Total: 29 API endpoints**
 
 ---
 
-**Version:** 2.0
+**Version:** 2.1
 **Last Updated:** January 23, 2026
