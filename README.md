@@ -165,24 +165,59 @@ library-management-system/
 
 ## API Endpoints
 
-### Authentication
+### Complete REST API (24 endpoints)
+
+**Documentation:** See [MOBILE_API.md](MOBILE_API.md) for complete mobile API documentation.
+
+#### Authentication APIs (4)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET/POST | `/login` | User login |
+| POST | `/api/auth/login` | Login (JSON response) |
+| POST | `/api/auth/logout` | Logout (JSON response) |
+| POST | `/api/auth/register` | Register user (JSON response) |
+| GET | `/api/auth/me` | Get current user info |
+
+#### Dashboard API (1)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/dashboard` | Get library statistics |
+
+#### Books APIs (7)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/books` | List books (with pagination) |
+| GET | `/api/books/<id>` | Get single book |
+| GET | `/api/books/search?q={query}` | Quick search books |
+| POST | `/api/books` | Create book |
+| PUT | `/api/books/<id>` | Update book |
+| DELETE | `/api/books/<id>` | Delete book |
+
+#### Members APIs (7)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/members` | List members (with pagination) |
+| GET | `/api/members/<id>` | Get single member |
+| GET | `/api/members/search?q={query}` | Quick search members |
+| POST | `/api/members` | Create member |
+| PUT | `/api/members/<id>` | Update member |
+| DELETE | `/api/members/<id>` | Delete member |
+
+#### Transactions APIs (5)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/transactions` | List transactions (with pagination) |
+| GET | `/api/transactions/<id>` | Get single transaction |
+| POST | `/api/transactions/issue` | Issue book |
+| POST | `/api/transactions/<id>/return` | Return book |
+
+### Web Routes (for browser access)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | `/login` | User login page |
 | GET | `/logout` | User logout |
-| GET/POST | `/register` | User registration |
-| GET/POST | `/change-password` | Change password |
-| GET/POST | `/forgot-password` | Reset password |
-
-### Books API
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/books/search?q={query}` | Search available books |
-
-### Members API
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/members/search?q={query}` | Search active members |
+| GET/POST | `/register` | User registration page |
+| GET/POST | `/change-password` | Change password page |
+| GET/POST | `/forgot-password` | Reset password page |
 
 ## Logging
 

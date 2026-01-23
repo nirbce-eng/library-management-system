@@ -61,7 +61,46 @@ username=admin&email=admin@library.com&new_password=newpass&confirm_password=new
 
 ## JSON API Endpoints
 
-### Search Books
+**For complete mobile API documentation with all 24 endpoints, see [MOBILE_API.md](MOBILE_API.md)**
+
+### Quick Reference - All API Endpoints
+
+#### Authentication APIs (4 endpoints)
+- POST `/api/auth/login` - Login with JSON
+- POST `/api/auth/logout` - Logout with JSON
+- POST `/api/auth/register` - Register with JSON
+- GET `/api/auth/me` - Get current user
+
+#### Dashboard API (1 endpoint)
+- GET `/api/dashboard` - Get library statistics
+
+#### Books APIs (7 endpoints)
+- GET `/api/books` - List books (with pagination)
+- GET `/api/books/<id>` - Get single book
+- GET `/api/books/search?q={query}` - Quick search books
+- POST `/api/books` - Create book
+- PUT `/api/books/<id>` - Update book
+- DELETE `/api/books/<id>` - Delete book
+
+#### Members APIs (7 endpoints)
+- GET `/api/members` - List members (with pagination)
+- GET `/api/members/<id>` - Get single member
+- GET `/api/members/search?q={query}` - Quick search members
+- POST `/api/members` - Create member
+- PUT `/api/members/<id>` - Update member
+- DELETE `/api/members/<id>` - Delete member
+
+#### Transactions APIs (5 endpoints)
+- GET `/api/transactions` - List transactions (with pagination)
+- GET `/api/transactions/<id>` - Get single transaction
+- POST `/api/transactions/issue` - Issue book
+- POST `/api/transactions/<id>/return` - Return book
+
+---
+
+### Legacy Search Endpoints
+
+#### Search Books
 Search for available books by title, author, or ISBN.
 
 ```http
