@@ -209,6 +209,20 @@ def init_db():
             )
         ''')
 
+        # Chat messages table for admin-to-admin communication
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL,
+                receiver_id INTEGER NOT NULL,
+                message TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (sender_id) REFERENCES users (id),
+                FOREIGN KEY (receiver_id) REFERENCES users (id)
+            )
+        ''')
+
         # Create default admin user if not exists
         cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', ('admin',))
         if cursor.fetchone()[0] == 0:
@@ -252,6 +266,45 @@ def login_required(f):
                 return jsonify({'error': 'Unauthorized'}), 401
             flash('Please log in to access this page.', 'error')
             return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# Admin-only decorator for chat features
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check for API token first (for mobile apps)
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            with get_db() as conn:
+                cursor = conn.cursor()
+                token_record = cursor.execute('''
+                    SELECT t.user_id, u.username, u.role
+                    FROM api_tokens t
+                    JOIN users u ON t.user_id = u.id
+                    WHERE t.token = ?
+                ''', (token,)).fetchone()
+
+                if token_record:
+                    if token_record['role'] != 'admin':
+                        return jsonify({'error': 'Admin access required'}), 403
+                    session['user_id'] = token_record['user_id']
+                    session['username'] = token_record['username']
+                    session['role'] = token_record['role']
+                    return f(*args, **kwargs)
+
+        # Fall back to session-based auth
+        if 'user_id' not in session:
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Unauthorized'}), 401
+            flash('Please log in to access this page.', 'error')
+            return redirect(url_for('login'))
+        if session.get('role') != 'admin':
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Admin access required'}), 403
+            flash('Admin access required.', 'error')
+            return redirect(url_for('index'))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -802,6 +855,13 @@ def return_book(transaction_id):
             flash('Transaction not found!', 'error')
     
     return redirect(url_for('transactions'))
+
+# Admin Chat Web Route
+@app.route('/chat')
+@admin_required
+def chat():
+    """Admin chat page"""
+    return render_template('chat.html')
 
 # API endpoints
 
@@ -1581,6 +1641,208 @@ def api_return_book(transaction_id):
             'fine_amount': fine
         }
     }), 200
+
+# ==================== Admin Chat API ====================
+
+@app.route('/api/chat/admins')
+@admin_required
+def api_get_admin_users():
+    """Get list of admin users for chat (excluding current user)"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        admins = cursor.execute('''
+            SELECT id, username, email
+            FROM users
+            WHERE role = 'admin' AND id != ?
+            ORDER BY username
+        ''', (session['user_id'],)).fetchall()
+
+        return jsonify({
+            'success': True,
+            'admins': [dict(admin) for admin in admins]
+        })
+
+@app.route('/api/chat/conversations')
+@admin_required
+def api_get_conversations():
+    """Get list of conversations for current user with last message preview"""
+    current_user_id = session['user_id']
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Get unique conversation partners with latest message
+        conversations = cursor.execute('''
+            SELECT
+                u.id as user_id,
+                u.username,
+                u.email,
+                m.message as last_message,
+                m.created_at as last_message_time,
+                m.sender_id as last_sender_id,
+                (
+                    SELECT COUNT(*)
+                    FROM chat_messages
+                    WHERE sender_id = u.id
+                    AND receiver_id = ?
+                    AND is_read = 0
+                ) as unread_count
+            FROM users u
+            INNER JOIN (
+                SELECT
+                    CASE
+                        WHEN sender_id = ? THEN receiver_id
+                        ELSE sender_id
+                    END as partner_id,
+                    message,
+                    created_at,
+                    sender_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY
+                            CASE
+                                WHEN sender_id = ? THEN receiver_id
+                                ELSE sender_id
+                            END
+                        ORDER BY created_at DESC
+                    ) as rn
+                FROM chat_messages
+                WHERE sender_id = ? OR receiver_id = ?
+            ) m ON u.id = m.partner_id AND m.rn = 1
+            WHERE u.role = 'admin'
+            ORDER BY m.created_at DESC
+        ''', (current_user_id, current_user_id, current_user_id,
+              current_user_id, current_user_id)).fetchall()
+
+        return jsonify({
+            'success': True,
+            'conversations': [dict(conv) for conv in conversations]
+        })
+
+@app.route('/api/chat/messages/<int:user_id>')
+@admin_required
+def api_get_messages(user_id):
+    """Get all messages between current user and specified user"""
+    current_user_id = session['user_id']
+
+    # Optional: get messages after a certain timestamp for polling
+    since = request.args.get('since', None)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Verify the other user is an admin
+        other_user = cursor.execute(
+            'SELECT id, username, role FROM users WHERE id = ? AND role = ?',
+            (user_id, 'admin')
+        ).fetchone()
+
+        if not other_user:
+            return jsonify({'error': 'User not found or not an admin'}), 404
+
+        # Get messages
+        if since:
+            messages = cursor.execute('''
+                SELECT id, sender_id, receiver_id, message, is_read, created_at
+                FROM chat_messages
+                WHERE ((sender_id = ? AND receiver_id = ?)
+                    OR (sender_id = ? AND receiver_id = ?))
+                AND created_at > ?
+                ORDER BY created_at ASC
+            ''', (current_user_id, user_id, user_id, current_user_id, since)).fetchall()
+        else:
+            messages = cursor.execute('''
+                SELECT id, sender_id, receiver_id, message, is_read, created_at
+                FROM chat_messages
+                WHERE (sender_id = ? AND receiver_id = ?)
+                   OR (sender_id = ? AND receiver_id = ?)
+                ORDER BY created_at ASC
+            ''', (current_user_id, user_id, user_id, current_user_id)).fetchall()
+
+        # Mark received messages as read
+        cursor.execute('''
+            UPDATE chat_messages
+            SET is_read = 1
+            WHERE sender_id = ? AND receiver_id = ? AND is_read = 0
+        ''', (user_id, current_user_id))
+        conn.commit()
+
+        return jsonify({
+            'success': True,
+            'other_user': dict(other_user),
+            'messages': [dict(msg) for msg in messages],
+            'current_user_id': current_user_id
+        })
+
+@app.route('/api/chat/messages', methods=['POST'])
+@admin_required
+def api_send_message():
+    """Send a message to another admin user"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    receiver_id = data.get('receiver_id')
+    message = data.get('message', '').strip()
+
+    if not receiver_id or not message:
+        return jsonify({'error': 'receiver_id and message are required'}), 400
+
+    current_user_id = session['user_id']
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Verify receiver is an admin
+        receiver = cursor.execute(
+            'SELECT id, role FROM users WHERE id = ? AND role = ?',
+            (receiver_id, 'admin')
+        ).fetchone()
+
+        if not receiver:
+            return jsonify({'error': 'Receiver not found or not an admin'}), 404
+
+        # Insert message
+        cursor.execute('''
+            INSERT INTO chat_messages (sender_id, receiver_id, message)
+            VALUES (?, ?, ?)
+        ''', (current_user_id, receiver_id, message))
+        conn.commit()
+
+        message_id = cursor.lastrowid
+
+        # Get the inserted message
+        new_message = cursor.execute('''
+            SELECT id, sender_id, receiver_id, message, is_read, created_at
+            FROM chat_messages WHERE id = ?
+        ''', (message_id,)).fetchone()
+
+        audit_logger.info(
+            f"CHAT_MESSAGE_SENT: from={current_user_id}, to={receiver_id}"
+        )
+
+        return jsonify({
+            'success': True,
+            'message': dict(new_message)
+        }), 201
+
+@app.route('/api/chat/unread-count')
+@admin_required
+def api_get_unread_count():
+    """Get total unread message count for current user"""
+    current_user_id = session['user_id']
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        count = cursor.execute('''
+            SELECT COUNT(*) FROM chat_messages
+            WHERE receiver_id = ? AND is_read = 0
+        ''', (current_user_id,)).fetchone()[0]
+
+        return jsonify({
+            'success': True,
+            'unread_count': count
+        })
 
 if __name__ == '__main__':
     logger.info("Starting Library Management System...")
