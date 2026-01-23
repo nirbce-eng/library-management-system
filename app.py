@@ -765,6 +765,114 @@ def return_book(transaction_id):
     return redirect(url_for('transactions'))
 
 # API endpoints
+
+# Authentication APIs
+@app.route('/api/auth/login', methods=['POST'])
+def api_login():
+    """API endpoint for user login"""
+    data = request.get_json()
+
+    if not data or 'username' not in data or 'password' not in data:
+        return jsonify({'error': 'Username and password required'}), 400
+
+    username = data['username']
+    password = data['password']
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        user = cursor.execute(
+            'SELECT * FROM users WHERE username = ?', (username,)
+        ).fetchone()
+
+        if user and check_password_hash(user['password_hash'], password):
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            session['role'] = user['role']
+            audit_logger.info(f"API_LOGIN: username='{username}'")
+
+            return jsonify({
+                'success': True,
+                'message': 'Login successful',
+                'user': {
+                    'id': user['id'],
+                    'username': user['username'],
+                    'email': user['email'],
+                    'role': user['role']
+                }
+            }), 200
+        else:
+            logger.warning(f"API failed login attempt for username: {username}")
+            return jsonify({'error': 'Invalid username or password'}), 401
+
+@app.route('/api/auth/logout', methods=['POST'])
+@login_required
+def api_logout():
+    """API endpoint for user logout"""
+    username = session.get('username', 'unknown')
+    session.clear()
+    audit_logger.info(f"API_LOGOUT: username='{username}'")
+    return jsonify({'success': True, 'message': 'Logout successful'}), 200
+
+@app.route('/api/auth/register', methods=['POST'])
+def api_register():
+    """API endpoint for user registration"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    username = data.get('username', '').strip()
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    # Validation
+    if len(username) < 3 or len(username) > 20:
+        return jsonify({'error': 'Username must be between 3 and 20 characters'}), 400
+
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO users (username, password_hash, email, role)
+                VALUES (?, ?, ?, ?)
+            ''', (username, generate_password_hash(password), email, 'staff'))
+            conn.commit()
+            audit_logger.info(f"API_USER_REGISTERED: username='{username}', email='{email}'")
+
+        return jsonify({
+            'success': True,
+            'message': 'Account created successfully',
+            'user': {
+                'username': username,
+                'email': email,
+                'role': 'staff'
+            }
+        }), 201
+    except sqlite3.IntegrityError as e:
+        if 'username' in str(e).lower():
+            return jsonify({'error': 'Username already exists'}), 409
+        else:
+            return jsonify({'error': 'Email already exists'}), 409
+
+@app.route('/api/auth/me', methods=['GET'])
+@login_required
+def api_get_current_user():
+    """API endpoint to get current user info"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        user = cursor.execute(
+            'SELECT id, username, email, role, created_at FROM users WHERE id = ?',
+            (session['user_id'],)
+        ).fetchone()
+
+        if user:
+            return jsonify(dict(user)), 200
+        return jsonify({'error': 'User not found'}), 404
+
+# Dashboard API
 @app.route('/api/dashboard')
 @login_required
 def api_dashboard():
@@ -862,6 +970,153 @@ def api_search_books():
 
         return jsonify([dict(book) for book in books])
 
+@app.route('/api/books', methods=['POST'])
+@login_required
+def api_create_book():
+    """API endpoint to create a book"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    title = data.get('title', '').strip()
+    author = data.get('author', '').strip()
+    isbn = data.get('isbn', '').strip()
+    publisher = data.get('publisher', '').strip()
+    publication_year = data.get('publication_year')
+    category = data.get('category', '').strip()
+    total_copies = data.get('total_copies', 1)
+
+    if not title or not author or not isbn:
+        return jsonify({'error': 'Title, author, and ISBN are required'}), 400
+
+    try:
+        total_copies = int(total_copies)
+        if total_copies < 1:
+            return jsonify({'error': 'Total copies must be at least 1'}), 400
+    except ValueError:
+        return jsonify({'error': 'Total copies must be a number'}), 400
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO books (title, author, isbn, publisher, publication_year, category, total_copies, available_copies)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (title, author, isbn, publisher, publication_year, category, total_copies, total_copies))
+            conn.commit()
+            book_id = cursor.lastrowid
+            audit_logger.info(f"API_BOOK_CREATED: id={book_id}, title='{title}', isbn='{isbn}'")
+
+        return jsonify({
+            'success': True,
+            'message': 'Book created successfully',
+            'book': {
+                'id': book_id,
+                'title': title,
+                'author': author,
+                'isbn': isbn,
+                'publisher': publisher,
+                'publication_year': publication_year,
+                'category': category,
+                'total_copies': total_copies,
+                'available_copies': total_copies
+            }
+        }), 201
+    except sqlite3.IntegrityError:
+        return jsonify({'error': 'Book with this ISBN already exists'}), 409
+
+@app.route('/api/books/<int:book_id>', methods=['PUT'])
+@login_required
+def api_update_book(book_id):
+    """API endpoint to update a book"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if book exists
+        book = cursor.execute('SELECT * FROM books WHERE id = ?', (book_id,)).fetchone()
+        if not book:
+            return jsonify({'error': 'Book not found'}), 404
+
+        title = data.get('title', book['title']).strip()
+        author = data.get('author', book['author']).strip()
+        isbn = data.get('isbn', book['isbn']).strip()
+        publisher = data.get('publisher', book['publisher'])
+        publication_year = data.get('publication_year', book['publication_year'])
+        category = data.get('category', book['category'])
+        total_copies = data.get('total_copies', book['total_copies'])
+
+        try:
+            total_copies = int(total_copies)
+            if total_copies < 1:
+                return jsonify({'error': 'Total copies must be at least 1'}), 400
+
+            # Calculate new available copies
+            issued_copies = book['total_copies'] - book['available_copies']
+            new_available = total_copies - issued_copies
+
+            if new_available < 0:
+                return jsonify({'error': 'Total copies cannot be less than issued copies'}), 400
+
+            cursor.execute('''
+                UPDATE books
+                SET title=?, author=?, isbn=?, publisher=?, publication_year=?, category=?, total_copies=?, available_copies=?
+                WHERE id=?
+            ''', (title, author, isbn, publisher, publication_year, category, total_copies, new_available, book_id))
+            conn.commit()
+            audit_logger.info(f"API_BOOK_UPDATED: id={book_id}, title='{title}'")
+
+            return jsonify({
+                'success': True,
+                'message': 'Book updated successfully',
+                'book': {
+                    'id': book_id,
+                    'title': title,
+                    'author': author,
+                    'isbn': isbn,
+                    'publisher': publisher,
+                    'publication_year': publication_year,
+                    'category': category,
+                    'total_copies': total_copies,
+                    'available_copies': new_available
+                }
+            }), 200
+        except sqlite3.IntegrityError:
+            return jsonify({'error': 'Book with this ISBN already exists'}), 409
+        except ValueError:
+            return jsonify({'error': 'Total copies must be a number'}), 400
+
+@app.route('/api/books/<int:book_id>', methods=['DELETE'])
+@login_required
+def api_delete_book(book_id):
+    """API endpoint to delete a book"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if book has active transactions
+        active_transactions = cursor.execute('''
+            SELECT COUNT(*) FROM transactions WHERE book_id = ? AND status = "issued"
+        ''', (book_id,)).fetchone()[0]
+
+        if active_transactions > 0:
+            return jsonify({'error': 'Cannot delete book with active transactions'}), 409
+
+        # Check if book exists
+        book = cursor.execute('SELECT * FROM books WHERE id = ?', (book_id,)).fetchone()
+        if not book:
+            return jsonify({'error': 'Book not found'}), 404
+
+        cursor.execute('DELETE FROM books WHERE id = ?', (book_id,))
+        conn.commit()
+        audit_logger.info(f"API_BOOK_DELETED: id={book_id}")
+
+    return jsonify({'success': True, 'message': 'Book deleted successfully'}), 200
+
 @app.route('/api/members')
 @login_required
 def api_list_members():
@@ -940,6 +1195,125 @@ def api_search_members():
 
         return jsonify([dict(member) for member in members])
 
+@app.route('/api/members', methods=['POST'])
+@login_required
+def api_create_member():
+    """API endpoint to create a member"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    name = data.get('name', '').strip()
+    email = data.get('email', '').strip().lower()
+    phone = data.get('phone', '').strip()
+    address = data.get('address', '').strip()
+
+    if not name or not email:
+        return jsonify({'error': 'Name and email are required'}), 400
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO members (name, email, phone, address)
+                VALUES (?, ?, ?, ?)
+            ''', (name, email, phone, address))
+            conn.commit()
+            member_id = cursor.lastrowid
+            audit_logger.info(f"API_MEMBER_CREATED: id={member_id}, name='{name}', email='{email}'")
+
+        return jsonify({
+            'success': True,
+            'message': 'Member created successfully',
+            'member': {
+                'id': member_id,
+                'name': name,
+                'email': email,
+                'phone': phone,
+                'address': address,
+                'status': 'active'
+            }
+        }), 201
+    except sqlite3.IntegrityError:
+        return jsonify({'error': 'Member with this email already exists'}), 409
+
+@app.route('/api/members/<int:member_id>', methods=['PUT'])
+@login_required
+def api_update_member(member_id):
+    """API endpoint to update a member"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if member exists
+        member = cursor.execute('SELECT * FROM members WHERE id = ?', (member_id,)).fetchone()
+        if not member:
+            return jsonify({'error': 'Member not found'}), 404
+
+        name = data.get('name', member['name']).strip()
+        email = data.get('email', member['email']).strip().lower()
+        phone = data.get('phone', member['phone'])
+        address = data.get('address', member['address'])
+        status = data.get('status', member['status'])
+
+        if status not in ['active', 'inactive']:
+            return jsonify({'error': 'Status must be active or inactive'}), 400
+
+        try:
+            cursor.execute('''
+                UPDATE members
+                SET name=?, email=?, phone=?, address=?, status=?
+                WHERE id=?
+            ''', (name, email, phone, address, status, member_id))
+            conn.commit()
+            audit_logger.info(f"API_MEMBER_UPDATED: id={member_id}, name='{name}'")
+
+            return jsonify({
+                'success': True,
+                'message': 'Member updated successfully',
+                'member': {
+                    'id': member_id,
+                    'name': name,
+                    'email': email,
+                    'phone': phone,
+                    'address': address,
+                    'status': status
+                }
+            }), 200
+        except sqlite3.IntegrityError:
+            return jsonify({'error': 'Member with this email already exists'}), 409
+
+@app.route('/api/members/<int:member_id>', methods=['DELETE'])
+@login_required
+def api_delete_member(member_id):
+    """API endpoint to delete a member"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if member has active transactions
+        active_transactions = cursor.execute('''
+            SELECT COUNT(*) FROM transactions WHERE member_id = ? AND status = "issued"
+        ''', (member_id,)).fetchone()[0]
+
+        if active_transactions > 0:
+            return jsonify({'error': 'Cannot delete member with active transactions'}), 409
+
+        # Check if member exists
+        member = cursor.execute('SELECT * FROM members WHERE id = ?', (member_id,)).fetchone()
+        if not member:
+            return jsonify({'error': 'Member not found'}), 404
+
+        cursor.execute('DELETE FROM members WHERE id = ?', (member_id,))
+        conn.commit()
+        audit_logger.info(f"API_MEMBER_DELETED: id={member_id}")
+
+    return jsonify({'success': True, 'message': 'Member deleted successfully'}), 200
+
 @app.route('/api/transactions')
 @login_required
 def api_list_transactions():
@@ -1005,6 +1379,153 @@ def api_get_transaction(transaction_id):
         if transaction:
             return jsonify(dict(transaction))
         return jsonify({'error': 'Transaction not found'}), 404
+
+@app.route('/api/transactions/issue', methods=['POST'])
+@login_required
+def api_issue_book():
+    """API endpoint to issue a book"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    book_id = data.get('book_id')
+    member_id = data.get('member_id')
+    issue_date = data.get('issue_date')
+    due_days = data.get('due_days', 14)
+
+    if not book_id or not member_id or not issue_date:
+        return jsonify({'error': 'book_id, member_id, and issue_date are required'}), 400
+
+    try:
+        book_id = int(book_id)
+        member_id = int(member_id)
+        due_days = int(due_days)
+
+        # Validate and parse date
+        issue_date_obj = datetime.strptime(issue_date, '%Y-%m-%d')
+        due_date = issue_date_obj + timedelta(days=due_days)
+
+    except ValueError:
+        return jsonify({'error': 'Invalid data format'}), 400
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if book exists and is available
+        book = cursor.execute('SELECT available_copies FROM books WHERE id = ?', (book_id,)).fetchone()
+        if not book:
+            return jsonify({'error': 'Book not found'}), 404
+
+        if book['available_copies'] <= 0:
+            return jsonify({'error': 'Book is not available'}), 409
+
+        # Check if member exists and is active
+        member = cursor.execute('SELECT status FROM members WHERE id = ?', (member_id,)).fetchone()
+        if not member:
+            return jsonify({'error': 'Member not found'}), 404
+
+        if member['status'] != 'active':
+            return jsonify({'error': 'Member is not active'}), 409
+
+        # Issue the book
+        cursor.execute('''
+            INSERT INTO transactions (book_id, member_id, issue_date, due_date, status)
+            VALUES (?, ?, ?, ?, 'issued')
+        ''', (book_id, member_id, issue_date, due_date.strftime('%Y-%m-%d')))
+
+        transaction_id = cursor.lastrowid
+
+        # Update available copies
+        cursor.execute('''
+            UPDATE books SET available_copies = available_copies - 1 WHERE id = ?
+        ''', (book_id,))
+
+        conn.commit()
+        audit_logger.info(f"API_BOOK_ISSUED: transaction_id={transaction_id}, book_id={book_id}, member_id={member_id}")
+
+    return jsonify({
+        'success': True,
+        'message': 'Book issued successfully',
+        'transaction': {
+            'id': transaction_id,
+            'book_id': book_id,
+            'member_id': member_id,
+            'issue_date': issue_date,
+            'due_date': due_date.strftime('%Y-%m-%d'),
+            'status': 'issued'
+        }
+    }), 201
+
+@app.route('/api/transactions/<int:transaction_id>/return', methods=['POST'])
+@login_required
+def api_return_book(transaction_id):
+    """API endpoint to return a book"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    return_date = data.get('return_date')
+
+    if not return_date:
+        return jsonify({'error': 'return_date is required'}), 400
+
+    try:
+        return_date_obj = datetime.strptime(return_date, '%Y-%m-%d')
+    except ValueError:
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Get transaction details
+        transaction = cursor.execute('''
+            SELECT * FROM transactions WHERE id = ?
+        ''', (transaction_id,)).fetchone()
+
+        if not transaction:
+            return jsonify({'error': 'Transaction not found'}), 404
+
+        if transaction['status'] == 'returned':
+            return jsonify({'error': 'Book already returned'}), 409
+
+        # Calculate fine if overdue
+        due = datetime.strptime(transaction['due_date'], '%Y-%m-%d')
+        fine = 0
+        if return_date_obj > due:
+            overdue_days = (return_date_obj - due).days
+            fine = overdue_days * 1.0  # $1 per day
+
+        # Update transaction
+        cursor.execute('''
+            UPDATE transactions
+            SET return_date = ?, status = 'returned', fine_amount = ?
+            WHERE id = ?
+        ''', (return_date, fine, transaction_id))
+
+        # Update available copies
+        cursor.execute('''
+            UPDATE books SET available_copies = available_copies + 1 WHERE id = ?
+        ''', (transaction['book_id'],))
+
+        conn.commit()
+        audit_logger.info(f"API_BOOK_RETURNED: transaction_id={transaction_id}, fine=${fine:.2f}")
+
+    return jsonify({
+        'success': True,
+        'message': 'Book returned successfully',
+        'transaction': {
+            'id': transaction_id,
+            'book_id': transaction['book_id'],
+            'member_id': transaction['member_id'],
+            'issue_date': transaction['issue_date'],
+            'due_date': transaction['due_date'],
+            'return_date': return_date,
+            'status': 'returned',
+            'fine_amount': fine
+        }
+    }), 200
 
 if __name__ == '__main__':
     logger.info("Starting Library Management System...")
