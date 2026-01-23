@@ -152,22 +152,22 @@ ports:
 ### Backup Database
 
 ```bash
-# Copy from container
-docker cp library-management-system:/app/library.db ./backup_$(date +%Y%m%d).db
+# Copy from container (database is in persistent volume)
+docker cp library-management-system:/app/data/library.db ./backup_$(date +%Y%m%d).db
 
 # Automated backup script
 #!/bin/bash
 BACKUP_DIR="./backups"
 mkdir -p $BACKUP_DIR
-docker cp library-management-system:/app/library.db \
+docker cp library-management-system:/app/data/library.db \
   "$BACKUP_DIR/library_$(date +%Y%m%d_%H%M%S).db"
 ```
 
 ### Restore Database
 
 ```bash
-# Copy backup to container
-docker cp ./backup.db library-management-system:/app/library.db
+# Copy backup to container (database is in persistent volume)
+docker cp ./backup.db library-management-system:/app/data/library.db
 
 # Restart container
 docker restart library-management-system
@@ -215,8 +215,8 @@ docker exec -it library-management-system /bin/bash
 # Run single command
 docker exec library-management-system ls -la /app/logs
 
-# Access SQLite database
-docker exec -it library-management-system sqlite3 /app/library.db
+# Access SQLite database (stored in persistent volume)
+docker exec -it library-management-system sqlite3 /app/data/library.db
 ```
 
 ## Networking
@@ -316,8 +316,8 @@ docker compose up -d --build
 docker compose down -v
 docker compose up -d
 
-# Check database file
-docker exec library-management-system ls -la /app/library.db
+# Check database file (in persistent volume)
+docker exec library-management-system ls -la /app/data/library.db
 ```
 
 ### Permission Issues
@@ -327,7 +327,7 @@ docker exec library-management-system ls -la /app/library.db
 docker exec library-management-system ls -la /app/
 
 # Fix permissions (if needed)
-docker exec library-management-system chmod 644 /app/library.db
+docker exec library-management-system chmod 644 /app/data/library.db
 ```
 
 ### Out of Memory

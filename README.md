@@ -84,7 +84,9 @@ library-management-system/
 ├── requirements.txt            # Python dependencies
 ├── Dockerfile                  # Docker configuration
 ├── docker-compose.yml          # Docker Compose configuration
-├── library.db                  # SQLite database
+│
+├── data/                       # Data directory (auto-created)
+│   └── library.db             # SQLite database (persistent)
 │
 ├── logs/                       # Log files (auto-created)
 │   ├── app.log                # General application logs

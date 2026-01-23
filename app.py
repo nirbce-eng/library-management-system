@@ -17,10 +17,13 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-in-production'
 
-DATABASE = 'library.db'
+# Data and log directories
+DATA_DIR = 'data'
 LOG_DIR = 'logs'
+DATABASE = os.path.join(DATA_DIR, 'library.db')
 
-# Ensure logs directory exists
+# Ensure data and logs directories exist
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Configure logging
