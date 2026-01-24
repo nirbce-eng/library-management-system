@@ -1069,11 +1069,11 @@ def return_book(transaction_id):
     
     return redirect(url_for('transactions'))
 
-# Admin Chat Web Route
+# Chat Web Route
 @app.route('/chat')
-@admin_required
+@login_required
 def chat():
-    """Admin chat page"""
+    """Chat page for all users"""
     return render_template('chat.html')
 
 # Ledger Web Route
