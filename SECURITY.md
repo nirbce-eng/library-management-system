@@ -11,12 +11,22 @@ This document outlines the security features, configurations, and best practices
 - **Password Hashing**: Uses Werkzeug's secure password hashing (PBKDF2-SHA256)
 - **Token Invalidation**: API tokens are invalidated on password change/reset
 
+#### API Token Security
+- **Token Expiration**: API tokens expire after 24 hours
+- **Single Active Token**: Only one token per user (old tokens deleted on new login)
+- **Secure Token Generation**: Uses `secrets.token_hex(32)` for cryptographically secure tokens
+
 #### Rate Limiting
-- Login attempts: **5 per minute**
-- Registration: **3 per minute**
-- Password change/reset: **3 per minute**
-- API authentication: **5 per minute**
-- General endpoints: **200 per day, 50 per hour**
+| Endpoint | Limit |
+|----------|-------|
+| Login attempts | 5 per minute |
+| Registration | 3 per minute |
+| Password change/reset | 3 per minute |
+| API authentication | 5 per minute |
+| Create/Update operations | 30 per minute |
+| Delete operations | 10 per minute |
+| Chat messages | 60 per minute |
+| General endpoints | 200 per day, 50 per hour |
 
 #### Session Security
 - Secure session cookies (HTTPS only in production)
@@ -27,17 +37,23 @@ This document outlines the security features, configurations, and best practices
 
 ### 2. Input Validation & Sanitization
 
-All user inputs are validated and sanitized:
+All user inputs are validated and sanitized using `html.escape()` and length limits:
 
-| Input Type | Validation Rules |
-|------------|------------------|
-| Username | 3-20 alphanumeric characters or underscores |
-| Email | Valid email format |
-| Password | Min 8 chars, 1 letter, 1 number |
-| ISBN | Valid ISBN-10 or ISBN-13 format |
-| Phone | 7-20 chars, digits and common separators |
-| Dates | YYYY-MM-DD format |
-| Numbers | Positive integers within defined ranges |
+| Input Type | Validation Rules | Max Length |
+|------------|------------------|------------|
+| Username | 3-20 alphanumeric characters or underscores | 20 |
+| Email | Valid email format | 100 |
+| Password | Min 8 chars, 1 letter, 1 number | - |
+| ISBN | Valid ISBN-10 or ISBN-13 format | 20 |
+| Phone | 7-20 chars, digits and common separators | 20 |
+| Dates | YYYY-MM-DD format | - |
+| Numbers | Positive integers within defined ranges | - |
+| Book Title | Required, non-empty | 200 |
+| Author | Required, non-empty | 200 |
+| Member Name | Minimum 2 characters | 100 |
+| Address | Optional | 500 |
+| Chat Message | Non-empty, sanitized | 2000 |
+| Search Queries | SQL wildcards escaped | 100 |
 
 ### 3. CSRF Protection
 
@@ -58,74 +74,95 @@ All responses include security headers:
 | Referrer-Policy | strict-origin-when-cross-origin | Control referrer info |
 | Content-Security-Policy | Restrictive policy | Prevent XSS/injection |
 | Cache-Control | no-store | Prevent caching sensitive data |
+| Permissions-Policy | geolocation=(), microphone=(), camera=() | Restrict browser features |
+| Strict-Transport-Security | max-age=31536000; includeSubDomains | HTTPS enforcement (when enabled) |
 
-### 5. CORS Configuration
+### 5. Content Security Policy (CSP)
+
+```
+default-src 'self';
+script-src 'self' 'unsafe-inline';
+style-src 'self' 'unsafe-inline';
+img-src 'self' data:;
+font-src 'self';
+form-action 'self';
+frame-ancestors 'self';
+base-uri 'self'
+```
+
+### 6. CORS Configuration
 
 - Restricted to allowed origins only
 - Configurable via `ALLOWED_ORIGINS` environment variable
 - Default: `http://localhost:3000,http://localhost:5000`
 
-### 6. SQL Injection Prevention
+### 7. SQL Injection Prevention
 
 - All database queries use parameterized statements
 - No string interpolation in SQL queries
+- Search queries sanitize SQL wildcards (%, _)
 
-### 7. Access Control
+### 8. Access Control
 
 - Role-based access: Admin and Staff roles
-- Admin-only endpoints: Ledger, Chat administration
+- Admin-only endpoints: Ledger, user management
 - All routes require authentication (except login/register)
+- API token and session-based authentication supported
 
 ## Environment Variables
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `SECRET_KEY` | Flask session secret key (32+ bytes) | **Yes** for production |
+| `SECRET_KEY` | Flask session secret key (32+ bytes) | **Yes** (required in production) |
 | `ADMIN_PASSWORD` | Initial admin password | Recommended |
 | `ALLOWED_ORIGINS` | Comma-separated allowed CORS origins | No |
 | `FLASK_ENV` | production/development | No (default: production) |
 | `FLASK_DEBUG` | true/false | No (default: false) |
+| `ENABLE_HSTS` | Enable Strict-Transport-Security header | No (default: false) |
+| `SECRET_COOKIE_SECURE` | Require HTTPS for cookies | No (default: true) |
 
 ## Production Deployment Checklist
 
 ### Required Steps
 
-1. **Set Secret Key**
+1. **Generate and Set Secret Key**
    ```bash
    # Generate a secure key
    python -c "import secrets; print(secrets.token_hex(32))"
 
-   # Set in environment
-   export SECRET_KEY="your-generated-key-here"
+   # Create .env file
+   echo "SECRET_KEY=your-generated-key-here" > .env
    ```
 
 2. **Set Admin Password**
    ```bash
-   export ADMIN_PASSWORD="your-secure-admin-password"
+   echo "ADMIN_PASSWORD=your-secure-admin-password" >> .env
    ```
 
 3. **Configure CORS Origins**
    ```bash
-   export ALLOWED_ORIGINS="https://yourdomain.com"
+   echo "ALLOWED_ORIGINS=https://yourdomain.com" >> .env
    ```
 
 4. **Enable HTTPS**
    - Use a reverse proxy (nginx, traefik)
    - Configure SSL certificates
-   - Set `SESSION_COOKIE_SECURE=True` (automatic in production)
+   - Set `ENABLE_HSTS=true` for HTTPS enforcement
+   - Set `SECRET_COOKIE_SECURE=true` (default)
 
 ### Docker Production Deployment
 
 ```bash
-# Create .env file
+# Create .env file with required variables
 cat > .env << EOF
 SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
 ADMIN_PASSWORD=your-secure-password
 ALLOWED_ORIGINS=https://yourdomain.com
+ENABLE_HSTS=true
 EOF
 
 # Deploy
-docker-compose --env-file .env up -d
+docker-compose up -d
 ```
 
 ### Docker Security Features
@@ -133,6 +170,7 @@ docker-compose --env-file .env up -d
 - **Non-root user**: Application runs as `appuser`
 - **Read-only filesystem**: Container filesystem is read-only
 - **No new privileges**: Prevents privilege escalation
+- **Resource limits**: Memory (512MB) and CPU (1.0) limits
 - **Health checks**: Automatic container health monitoring
 - **Gunicorn**: Production WSGI server (not Flask dev server)
 
@@ -172,6 +210,29 @@ Each log entry includes:
    tail -f logs/audit.log
    ```
 
+4. **Monitor for expired tokens**
+   ```bash
+   grep "Token expired" logs/app.log
+   ```
+
+## Penetration Testing Results
+
+### Vulnerabilities Fixed (v2.1.0)
+
+| Issue | Severity | Status |
+|-------|----------|--------|
+| Missing input sanitization in edit_book() | High | Fixed |
+| Missing input sanitization in edit_member() | High | Fixed |
+| Missing validation in issue_book() | Medium | Fixed |
+| Missing validation in return_book() | Medium | Fixed |
+| Chat messages not sanitized (XSS risk) | High | Fixed |
+| API endpoints missing input sanitization | High | Fixed |
+| API tokens never expire | Medium | Fixed (24h expiration) |
+| Hardcoded SECRET_KEY in docker-compose | Critical | Fixed (required env var) |
+| Missing rate limiting on API mutations | Medium | Fixed |
+| Missing HSTS header | Low | Fixed (configurable) |
+| Missing Permissions-Policy header | Low | Fixed |
+
 ## Known Limitations
 
 1. **SQLite**: Single-file database, not suitable for high-concurrency production
@@ -189,6 +250,21 @@ If you discover a security vulnerability, please:
 4. Allow reasonable time for a fix before disclosure
 
 ## Changelog
+
+### Version 2.1.0 (Security Penetration Testing)
+
+- Added input sanitization to edit_book() and edit_member() routes
+- Added validation to issue_book() and return_book() routes
+- Added sanitization to all API create/update endpoints
+- Implemented API token expiration (24 hours)
+- Added rate limiting to API mutation endpoints
+- Added Strict-Transport-Security header support (ENABLE_HSTS)
+- Added Permissions-Policy header
+- Enhanced Content-Security-Policy with form-action and base-uri
+- Removed hardcoded SECRET_KEY from docker-compose.yml
+- Added resource limits (memory/CPU) to Docker deployment
+- Added SQL wildcard escaping in search queries
+- Sanitized chat messages to prevent XSS
 
 ### Version 2.0.0 (Security Hardening)
 

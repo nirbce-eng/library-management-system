@@ -117,6 +117,16 @@ def validate_password_strength(password):
         return False, "Password must contain at least one number"
     return True, "Password is strong"
 
+def sanitize_search_query(query, max_length=100):
+    """Sanitize search query to prevent SQL wildcard abuse"""
+    if not query:
+        return ''
+    # Strip and limit length
+    query = str(query).strip()[:max_length]
+    # Escape SQL LIKE special characters
+    query = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    return query
+
 # =============================================================================
 # SECURITY HEADERS MIDDLEWARE
 # =============================================================================
@@ -131,6 +141,13 @@ def add_security_headers(response):
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
 
+    # HSTS header - only enable when using HTTPS
+    if os.environ.get('ENABLE_HSTS', 'false').lower() == 'true':
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+
+    # Permissions Policy (formerly Feature Policy)
+    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+
     # Content Security Policy
     if not request.path.startswith('/api/'):
         response.headers['Content-Security-Policy'] = (
@@ -139,7 +156,9 @@ def add_security_headers(response):
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "font-src 'self'; "
-            "frame-ancestors 'self'"
+            "form-action 'self'; "
+            "frame-ancestors 'self'; "
+            "base-uri 'self'"
         )
     return response
 
@@ -339,6 +358,7 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 token TEXT UNIQUE NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -386,13 +406,22 @@ def login_required(f):
             with get_db() as conn:
                 cursor = conn.cursor()
                 token_record = cursor.execute('''
-                    SELECT t.user_id, u.username, u.role
+                    SELECT t.user_id, t.expires_at, u.username, u.role
                     FROM api_tokens t
                     JOIN users u ON t.user_id = u.id
                     WHERE t.token = ?
                 ''', (token,)).fetchone()
 
                 if token_record:
+                    # Check if token has expired
+                    if token_record['expires_at']:
+                        expires_at = datetime.strptime(token_record['expires_at'], '%Y-%m-%d %H:%M:%S')
+                        if datetime.now() > expires_at:
+                            # Delete expired token
+                            cursor.execute('DELETE FROM api_tokens WHERE token = ?', (token,))
+                            conn.commit()
+                            return jsonify({'error': 'Token expired. Please login again.'}), 401
+
                     # Set session data for the request
                     session['user_id'] = token_record['user_id']
                     session['username'] = token_record['username']
@@ -420,13 +449,22 @@ def admin_required(f):
             with get_db() as conn:
                 cursor = conn.cursor()
                 token_record = cursor.execute('''
-                    SELECT t.user_id, u.username, u.role
+                    SELECT t.user_id, t.expires_at, u.username, u.role
                     FROM api_tokens t
                     JOIN users u ON t.user_id = u.id
                     WHERE t.token = ?
                 ''', (token,)).fetchone()
 
                 if token_record:
+                    # Check if token has expired
+                    if token_record['expires_at']:
+                        expires_at = datetime.strptime(token_record['expires_at'], '%Y-%m-%d %H:%M:%S')
+                        if datetime.now() > expires_at:
+                            # Delete expired token
+                            cursor.execute('DELETE FROM api_tokens WHERE token = ?', (token,))
+                            conn.commit()
+                            return jsonify({'error': 'Token expired. Please login again.'}), 401
+
                     if token_record['role'] != 'admin':
                         return jsonify({'error': 'Admin access required'}), 403
                     session['user_id'] = token_record['user_id']
@@ -762,15 +800,46 @@ def edit_book(book_id):
     """Edit a book"""
     with get_db() as conn:
         cursor = conn.cursor()
-        
+
         if request.method == 'POST':
-            title = request.form['title']
-            author = request.form['author']
-            isbn = request.form['isbn']
-            publisher = request.form.get('publisher', '')
+            # Sanitize all inputs
+            title = sanitize_string(request.form.get('title', ''), 200)
+            author = sanitize_string(request.form.get('author', ''), 200)
+            isbn = sanitize_string(request.form.get('isbn', ''), 20)
+            publisher = sanitize_string(request.form.get('publisher', ''), 200)
             publication_year = request.form.get('publication_year', None)
-            category = request.form.get('category', '')
-            total_copies = int(request.form.get('total_copies', 1))
+            category = sanitize_string(request.form.get('category', ''), 50)
+            total_copies_str = request.form.get('total_copies', '1')
+
+            # Validation
+            if not title or len(title) < 1:
+                flash('Title is required.', 'error')
+                return redirect(url_for('edit_book', book_id=book_id))
+
+            if not author or len(author) < 1:
+                flash('Author is required.', 'error')
+                return redirect(url_for('edit_book', book_id=book_id))
+
+            if not isbn or not validate_isbn(isbn):
+                flash('Please enter a valid ISBN (10 or 13 digits).', 'error')
+                return redirect(url_for('edit_book', book_id=book_id))
+
+            if not validate_positive_integer(total_copies_str, 1000):
+                flash('Total copies must be a number between 1 and 1000.', 'error')
+                return redirect(url_for('edit_book', book_id=book_id))
+
+            total_copies = int(total_copies_str)
+
+            # Validate publication year if provided
+            if publication_year:
+                try:
+                    year = int(publication_year)
+                    if year < 1000 or year > datetime.now().year + 1:
+                        flash('Please enter a valid publication year.', 'error')
+                        return redirect(url_for('edit_book', book_id=book_id))
+                except ValueError:
+                    flash('Publication year must be a valid number.', 'error')
+                    return redirect(url_for('edit_book', book_id=book_id))
             
             try:
                 # Get current available copies
@@ -896,14 +965,33 @@ def edit_member(member_id):
     """Edit a member"""
     with get_db() as conn:
         cursor = conn.cursor()
-        
+
         if request.method == 'POST':
-            name = request.form['name']
-            email = request.form['email']
-            phone = request.form.get('phone', '')
-            address = request.form.get('address', '')
+            # Sanitize all inputs
+            name = sanitize_string(request.form.get('name', ''), 100)
+            email = sanitize_string(request.form.get('email', ''), 100).lower()
+            phone = sanitize_string(request.form.get('phone', ''), 20)
+            address = sanitize_string(request.form.get('address', ''), 500)
             status = request.form.get('status', 'active')
-            
+
+            # Validation
+            if not name or len(name) < 2:
+                flash('Name is required (minimum 2 characters).', 'error')
+                return redirect(url_for('edit_member', member_id=member_id))
+
+            if not validate_email(email):
+                flash('Please enter a valid email address.', 'error')
+                return redirect(url_for('edit_member', member_id=member_id))
+
+            if phone and not validate_phone(phone):
+                flash('Please enter a valid phone number.', 'error')
+                return redirect(url_for('edit_member', member_id=member_id))
+
+            # Validate status
+            if status not in ['active', 'inactive']:
+                flash('Invalid status value.', 'error')
+                return redirect(url_for('edit_member', member_id=member_id))
+
             try:
                 cursor.execute('''
                     UPDATE members
@@ -979,11 +1067,35 @@ def transactions():
 def issue_book():
     """Issue a book to a member"""
     if request.method == 'POST':
-        book_id = int(request.form['book_id'])
-        member_id = int(request.form['member_id'])
-        issue_date = request.form['issue_date']
-        due_days = int(request.form.get('due_days', 14))
-        
+        # Validate and sanitize inputs
+        book_id_str = request.form.get('book_id', '')
+        member_id_str = request.form.get('member_id', '')
+        issue_date = request.form.get('issue_date', '')
+        due_days_str = request.form.get('due_days', '14')
+
+        # Validate book_id
+        if not validate_positive_integer(book_id_str, 999999):
+            flash('Invalid book selection.', 'error')
+            return redirect(url_for('issue_book'))
+        book_id = int(book_id_str)
+
+        # Validate member_id
+        if not validate_positive_integer(member_id_str, 999999):
+            flash('Invalid member selection.', 'error')
+            return redirect(url_for('issue_book'))
+        member_id = int(member_id_str)
+
+        # Validate issue_date
+        if not validate_date(issue_date):
+            flash('Invalid issue date format. Use YYYY-MM-DD.', 'error')
+            return redirect(url_for('issue_book'))
+
+        # Validate due_days
+        if not validate_positive_integer(due_days_str, 365):
+            flash('Due days must be between 1 and 365.', 'error')
+            return redirect(url_for('issue_book'))
+        due_days = int(due_days_str)
+
         due_date = datetime.strptime(issue_date, '%Y-%m-%d') + timedelta(days=due_days)
         
         with get_db() as conn:
@@ -1023,8 +1135,13 @@ def issue_book():
 @login_required
 def return_book(transaction_id):
     """Return a book"""
-    return_date = request.form['return_date']
-    
+    return_date = request.form.get('return_date', '')
+
+    # Validate return_date
+    if not validate_date(return_date):
+        flash('Invalid return date format. Use YYYY-MM-DD.', 'error')
+        return redirect(url_for('transactions'))
+
     with get_db() as conn:
         cursor = conn.cursor()
         
@@ -1171,17 +1288,18 @@ def api_login():
         ).fetchone()
 
         if user and check_password_hash(user['password_hash'], password):
-            # Generate API token for mobile app
+            # Generate API token for mobile app with 24-hour expiration
             api_token = secrets.token_hex(32)
+            token_expires_at = datetime.now() + timedelta(hours=24)
 
             # Delete old tokens for this user (keep only one active token)
             cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
 
-            # Store the new token
+            # Store the new token with expiration
             cursor.execute('''
-                INSERT INTO api_tokens (user_id, token)
-                VALUES (?, ?)
-            ''', (user['id'], api_token))
+                INSERT INTO api_tokens (user_id, token, expires_at)
+                VALUES (?, ?, ?)
+            ''', (user['id'], api_token, token_expires_at.strftime('%Y-%m-%d %H:%M:%S')))
             conn.commit()
 
             # Also set session for web compatibility
@@ -1381,6 +1499,7 @@ def api_search_books():
 
 @app.route('/api/books', methods=['POST'])
 @login_required
+@limiter.limit("30 per minute")
 def api_create_book():
     """API endpoint to create a book"""
     data = request.get_json()
@@ -1388,16 +1507,29 @@ def api_create_book():
     if not data:
         return jsonify({'error': 'Request body required'}), 400
 
-    title = data.get('title', '').strip()
-    author = data.get('author', '').strip()
-    isbn = data.get('isbn', '').strip()
-    publisher = data.get('publisher', '').strip()
+    # Sanitize all inputs
+    title = sanitize_string(data.get('title', ''), 200)
+    author = sanitize_string(data.get('author', ''), 200)
+    isbn = sanitize_string(data.get('isbn', ''), 20)
+    publisher = sanitize_string(data.get('publisher', ''), 200)
     publication_year = data.get('publication_year')
-    category = data.get('category', '').strip()
+    category = sanitize_string(data.get('category', ''), 50)
     total_copies = data.get('total_copies', 1)
 
-    if not title or not author or not isbn:
-        return jsonify({'error': 'Title, author, and ISBN are required'}), 400
+    if not title or not author:
+        return jsonify({'error': 'Title and author are required'}), 400
+
+    if not isbn or not validate_isbn(isbn):
+        return jsonify({'error': 'Please provide a valid ISBN (10 or 13 digits)'}), 400
+
+    # Validate publication year if provided
+    if publication_year:
+        try:
+            year = int(publication_year)
+            if year < 1000 or year > datetime.now().year + 1:
+                return jsonify({'error': 'Please provide a valid publication year'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Publication year must be a valid number'}), 400
 
     try:
         total_copies = int(total_copies)
@@ -1437,6 +1569,7 @@ def api_create_book():
 
 @app.route('/api/books/<int:book_id>', methods=['PUT'])
 @login_required
+@limiter.limit("30 per minute")
 def api_update_book(book_id):
     """API endpoint to update a book"""
     data = request.get_json()
@@ -1452,13 +1585,30 @@ def api_update_book(book_id):
         if not book:
             return jsonify({'error': 'Book not found'}), 404
 
-        title = data.get('title', book['title']).strip()
-        author = data.get('author', book['author']).strip()
-        isbn = data.get('isbn', book['isbn']).strip()
-        publisher = data.get('publisher', book['publisher'])
+        # Sanitize all inputs
+        title = sanitize_string(data.get('title', book['title']), 200)
+        author = sanitize_string(data.get('author', book['author']), 200)
+        isbn = sanitize_string(data.get('isbn', book['isbn']), 20)
+        publisher = sanitize_string(data.get('publisher', book['publisher'] or ''), 200)
         publication_year = data.get('publication_year', book['publication_year'])
-        category = data.get('category', book['category'])
+        category = sanitize_string(data.get('category', book['category'] or ''), 50)
         total_copies = data.get('total_copies', book['total_copies'])
+
+        # Validate required fields
+        if not title or not author:
+            return jsonify({'error': 'Title and author are required'}), 400
+
+        if not isbn or not validate_isbn(isbn):
+            return jsonify({'error': 'Please provide a valid ISBN (10 or 13 digits)'}), 400
+
+        # Validate publication year if provided
+        if publication_year:
+            try:
+                year = int(publication_year)
+                if year < 1000 or year > datetime.now().year + 1:
+                    return jsonify({'error': 'Please provide a valid publication year'}), 400
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Publication year must be a valid number'}), 400
 
         try:
             total_copies = int(total_copies)
@@ -1502,6 +1652,7 @@ def api_update_book(book_id):
 
 @app.route('/api/books/<int:book_id>', methods=['DELETE'])
 @login_required
+@limiter.limit("10 per minute")
 def api_delete_book(book_id):
     """API endpoint to delete a book"""
     with get_db() as conn:
@@ -1606,6 +1757,7 @@ def api_search_members():
 
 @app.route('/api/members', methods=['POST'])
 @login_required
+@limiter.limit("30 per minute")
 def api_create_member():
     """API endpoint to create a member"""
     data = request.get_json()
@@ -1613,13 +1765,21 @@ def api_create_member():
     if not data:
         return jsonify({'error': 'Request body required'}), 400
 
-    name = data.get('name', '').strip()
-    email = data.get('email', '').strip().lower()
-    phone = data.get('phone', '').strip()
-    address = data.get('address', '').strip()
+    # Sanitize all inputs
+    name = sanitize_string(data.get('name', ''), 100)
+    email = sanitize_string(data.get('email', ''), 100).lower()
+    phone = sanitize_string(data.get('phone', ''), 20)
+    address = sanitize_string(data.get('address', ''), 500)
 
-    if not name or not email:
-        return jsonify({'error': 'Name and email are required'}), 400
+    # Validation
+    if not name or len(name) < 2:
+        return jsonify({'error': 'Name is required (minimum 2 characters)'}), 400
+
+    if not validate_email(email):
+        return jsonify({'error': 'Please provide a valid email address'}), 400
+
+    if phone and not validate_phone(phone):
+        return jsonify({'error': 'Please provide a valid phone number'}), 400
 
     try:
         with get_db() as conn:
@@ -1649,6 +1809,7 @@ def api_create_member():
 
 @app.route('/api/members/<int:member_id>', methods=['PUT'])
 @login_required
+@limiter.limit("30 per minute")
 def api_update_member(member_id):
     """API endpoint to update a member"""
     data = request.get_json()
@@ -1664,11 +1825,22 @@ def api_update_member(member_id):
         if not member:
             return jsonify({'error': 'Member not found'}), 404
 
-        name = data.get('name', member['name']).strip()
-        email = data.get('email', member['email']).strip().lower()
-        phone = data.get('phone', member['phone'])
-        address = data.get('address', member['address'])
+        # Sanitize all inputs
+        name = sanitize_string(data.get('name', member['name']), 100)
+        email = sanitize_string(data.get('email', member['email']), 100).lower()
+        phone = sanitize_string(data.get('phone', member['phone'] or ''), 20)
+        address = sanitize_string(data.get('address', member['address'] or ''), 500)
         status = data.get('status', member['status'])
+
+        # Validation
+        if not name or len(name) < 2:
+            return jsonify({'error': 'Name is required (minimum 2 characters)'}), 400
+
+        if not validate_email(email):
+            return jsonify({'error': 'Please provide a valid email address'}), 400
+
+        if phone and not validate_phone(phone):
+            return jsonify({'error': 'Please provide a valid phone number'}), 400
 
         if status not in ['active', 'inactive']:
             return jsonify({'error': 'Status must be active or inactive'}), 400
@@ -1699,6 +1871,7 @@ def api_update_member(member_id):
 
 @app.route('/api/members/<int:member_id>', methods=['DELETE'])
 @login_required
+@limiter.limit("10 per minute")
 def api_delete_member(member_id):
     """API endpoint to delete a member"""
     with get_db() as conn:
@@ -1791,6 +1964,7 @@ def api_get_transaction(transaction_id):
 
 @app.route('/api/transactions/issue', methods=['POST'])
 @login_required
+@limiter.limit("30 per minute")
 def api_issue_book():
     """API endpoint to issue a book"""
     data = request.get_json()
@@ -1868,6 +2042,7 @@ def api_issue_book():
 
 @app.route('/api/transactions/<int:transaction_id>/return', methods=['POST'])
 @login_required
+@limiter.limit("30 per minute")
 def api_return_book(transaction_id):
     """API endpoint to return a book"""
     data = request.get_json()
@@ -2069,6 +2244,7 @@ def api_get_messages(user_id):
 
 @app.route('/api/chat/messages', methods=['POST'])
 @login_required
+@limiter.limit("60 per minute")
 def api_send_message():
     """Send a message to another user"""
     data = request.get_json()
@@ -2095,6 +2271,12 @@ def api_send_message():
 
         if not receiver:
             return jsonify({'error': 'Receiver not found'}), 404
+
+        # Sanitize message to prevent XSS
+        message = sanitize_string(message, 2000)
+
+        if not message:
+            return jsonify({'error': 'Message cannot be empty'}), 400
 
         # Insert message
         cursor.execute('''
