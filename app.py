@@ -5,6 +5,9 @@ A comprehensive web application for managing library operations
 
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, session
 from flask_cors import CORS
+from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import sqlite3
 from datetime import datetime, timedelta
 from contextlib import contextmanager
@@ -15,12 +18,139 @@ import time
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 import secrets
+import re
+import html
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-in-production'
 
-# Enable CORS for API routes
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+# Security Configuration - Use environment variables with secure defaults
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max request size
+app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # CSRF token valid for 1 hour
+
+# Initialize CSRF protection
+csrf = CSRFProtect(app)
+
+# Initialize rate limiter
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
+
+# Get allowed origins from environment or use default
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5000').split(',')
+
+# Enable CORS for API routes with restricted origins
+CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=True)
+
+# Exempt API routes from CSRF (they use token authentication)
+csrf.exempt('api_login')
+csrf.exempt('api_register')
+
+# =============================================================================
+# INPUT VALIDATION HELPERS
+# =============================================================================
+
+def sanitize_string(value, max_length=500):
+    """Sanitize string input by stripping and limiting length"""
+    if not value:
+        return ''
+    return html.escape(str(value).strip()[:max_length])
+
+def validate_email(email):
+    """Validate email format"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+def validate_isbn(isbn):
+    """Validate ISBN format (ISBN-10 or ISBN-13)"""
+    # Remove hyphens and spaces
+    isbn = re.sub(r'[-\s]', '', isbn)
+    if len(isbn) == 10:
+        return isbn[:-1].isdigit() and (isbn[-1].isdigit() or isbn[-1].upper() == 'X')
+    elif len(isbn) == 13:
+        return isbn.isdigit()
+    return False
+
+def validate_phone(phone):
+    """Validate phone number format"""
+    if not phone:
+        return True  # Phone is optional
+    # Allow digits, spaces, hyphens, parentheses, plus sign
+    pattern = r'^[\d\s\-\(\)\+]{7,20}$'
+    return re.match(pattern, phone) is not None
+
+def validate_positive_integer(value, max_val=10000):
+    """Validate positive integer within range"""
+    try:
+        num = int(value)
+        return 1 <= num <= max_val
+    except (ValueError, TypeError):
+        return False
+
+def validate_date(date_str):
+    """Validate date format YYYY-MM-DD"""
+    try:
+        datetime.strptime(date_str, '%Y-%m-%d')
+        return True
+    except ValueError:
+        return False
+
+def validate_username(username):
+    """Validate username: alphanumeric, underscore, 3-20 chars"""
+    pattern = r'^[a-zA-Z0-9_]{3,20}$'
+    return re.match(pattern, username) is not None
+
+def validate_password_strength(password):
+    """Check password strength: min 8 chars, at least one number, one letter"""
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters"
+    if not re.search(r'[A-Za-z]', password):
+        return False, "Password must contain at least one letter"
+    if not re.search(r'\d', password):
+        return False, "Password must contain at least one number"
+    return True, "Password is strong"
+
+# =============================================================================
+# SECURITY HEADERS MIDDLEWARE
+# =============================================================================
+
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses"""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+
+    # Content Security Policy
+    if not request.path.startswith('/api/'):
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            "frame-ancestors 'self'"
+        )
+    return response
+
+# CSRF Error Handler
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    """Handle CSRF validation errors"""
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'CSRF token invalid or missing'}), 403
+    flash('Security validation failed. Please try again.', 'error')
+    return redirect(request.referrer or url_for('index'))
 
 # Data and log directories
 DATA_DIR = 'data'
@@ -230,11 +360,17 @@ def init_db():
         # Create default admin user if not exists
         cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', ('admin',))
         if cursor.fetchone()[0] == 0:
+            # Use environment variable for admin password or generate a secure random one
+            admin_password = os.environ.get('ADMIN_PASSWORD') or secrets.token_urlsafe(16)
             cursor.execute('''
                 INSERT INTO users (username, password_hash, email, role)
                 VALUES (?, ?, ?, ?)
-            ''', ('admin', generate_password_hash('admin123'), 'admin@library.com', 'admin'))
-            logger.info("Default admin user created (username: admin, password: admin123)")
+            ''', ('admin', generate_password_hash(admin_password), 'admin@library.com', 'admin'))
+            logger.warning("Default admin user created - CHANGE PASSWORD IMMEDIATELY!")
+            if not os.environ.get('ADMIN_PASSWORD'):
+                # Only print to console in development, never log the password
+                print(f"\n*** IMPORTANT: Default admin password: {admin_password} ***")
+                print("*** Set ADMIN_PASSWORD environment variable in production ***\n")
 
         conn.commit()
         logger.info("Database initialization complete")
@@ -314,14 +450,20 @@ def admin_required(f):
 
 # Authentication Routes
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("5 per minute", methods=["POST"])
 def login():
     """User login"""
     if 'user_id' in session:
         return redirect(url_for('index'))
 
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        username = sanitize_string(request.form.get('username', ''), 20)
+        password = request.form.get('password', '')
+
+        # Validate input
+        if not username or not password:
+            flash('Username and password are required.', 'error')
+            return render_template('login.html')
 
         with get_db() as conn:
             cursor = conn.cursor()
@@ -330,14 +472,15 @@ def login():
             ).fetchone()
 
             if user and check_password_hash(user['password_hash'], password):
+                session.permanent = True
                 session['user_id'] = user['id']
                 session['username'] = user['username']
                 session['role'] = user['role']
-                audit_logger.info(f"USER_LOGIN: username='{username}'")
+                audit_logger.info(f"USER_LOGIN: username='{username}', ip='{request.remote_addr}'")
                 flash('Welcome back!', 'success')
                 return redirect(url_for('index'))
             else:
-                logger.warning(f"Failed login attempt for username: {username}")
+                logger.warning(f"Failed login attempt for username: {username}, ip: {request.remote_addr}")
                 flash('Invalid username or password.', 'error')
 
     return render_template('login.html')
@@ -352,28 +495,34 @@ def logout():
     return redirect(url_for('login'))
 
 @app.route('/register', methods=['GET', 'POST'])
+@limiter.limit("3 per minute", methods=["POST"])
 def register():
     """User registration"""
     if 'user_id' in session:
         return redirect(url_for('index'))
 
     if request.method == 'POST':
-        username = request.form['username'].strip()
-        email = request.form['email'].strip().lower()
-        password = request.form['password']
-        confirm_password = request.form['confirm_password']
+        username = sanitize_string(request.form.get('username', ''), 20)
+        email = sanitize_string(request.form.get('email', ''), 100).lower()
+        password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
 
         # Validation
-        if len(username) < 3 or len(username) > 20:
-            flash('Username must be between 3 and 20 characters.', 'error')
+        if not validate_username(username):
+            flash('Username must be 3-20 alphanumeric characters or underscores.', 'error')
+            return render_template('register.html')
+
+        if not validate_email(email):
+            flash('Please enter a valid email address.', 'error')
             return render_template('register.html')
 
         if password != confirm_password:
             flash('Passwords do not match.', 'error')
             return render_template('register.html')
 
-        if len(password) < 6:
-            flash('Password must be at least 6 characters.', 'error')
+        is_strong, msg = validate_password_strength(password)
+        if not is_strong:
+            flash(msg, 'error')
             return render_template('register.html')
 
         try:
@@ -384,7 +533,7 @@ def register():
                     VALUES (?, ?, ?, ?)
                 ''', (username, generate_password_hash(password), email, 'staff'))
                 conn.commit()
-                audit_logger.info(f"USER_REGISTERED: username='{username}', email='{email}'")
+                audit_logger.info(f"USER_REGISTERED: username='{username}', ip='{request.remote_addr}'")
             flash('Account created successfully! Please sign in.', 'success')
             return redirect(url_for('login'))
         except sqlite3.IntegrityError as e:
@@ -392,25 +541,27 @@ def register():
                 flash('Username already exists.', 'error')
             else:
                 flash('Email already exists.', 'error')
-            logger.warning(f"Registration failed for username={username}, email={email}: {str(e)}")
+            logger.warning(f"Registration failed for username={username}: integrity error")
 
     return render_template('register.html')
 
 @app.route('/change-password', methods=['GET', 'POST'])
 @login_required
+@limiter.limit("3 per minute", methods=["POST"])
 def change_password():
     """Change user password"""
     if request.method == 'POST':
-        current_password = request.form['current_password']
-        new_password = request.form['new_password']
-        confirm_password = request.form['confirm_password']
+        current_password = request.form.get('current_password', '')
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
 
         if new_password != confirm_password:
             flash('New passwords do not match.', 'error')
             return render_template('change_password.html')
 
-        if len(new_password) < 6:
-            flash('New password must be at least 6 characters.', 'error')
+        is_strong, msg = validate_password_strength(new_password)
+        if not is_strong:
+            flash(msg, 'error')
             return render_template('change_password.html')
 
         with get_db() as conn:
@@ -424,34 +575,38 @@ def change_password():
                     'UPDATE users SET password_hash = ? WHERE id = ?',
                     (generate_password_hash(new_password), session['user_id'])
                 )
+                # Invalidate all API tokens for this user on password change
+                cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (session['user_id'],))
                 conn.commit()
-                audit_logger.info(f"PASSWORD_CHANGED: username='{session['username']}'")
+                audit_logger.info(f"PASSWORD_CHANGED: username='{session['username']}', ip='{request.remote_addr}'")
                 flash('Password updated successfully!', 'success')
                 return redirect(url_for('index'))
             else:
-                logger.warning(f"Failed password change attempt for user: {session['username']}")
+                logger.warning(f"Failed password change attempt for user: {session['username']}, ip: {request.remote_addr}")
                 flash('Current password is incorrect.', 'error')
 
     return render_template('change_password.html')
 
 @app.route('/forgot-password', methods=['GET', 'POST'])
+@limiter.limit("3 per minute", methods=["POST"])
 def forgot_password():
     """Reset password using username and email verification"""
     if 'user_id' in session:
         return redirect(url_for('index'))
 
     if request.method == 'POST':
-        username = request.form['username'].strip()
-        email = request.form['email'].strip().lower()
-        new_password = request.form['new_password']
-        confirm_password = request.form['confirm_password']
+        username = sanitize_string(request.form.get('username', ''), 20)
+        email = sanitize_string(request.form.get('email', ''), 100).lower()
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
 
         if new_password != confirm_password:
             flash('Passwords do not match.', 'error')
             return render_template('forgot_password.html')
 
-        if len(new_password) < 6:
-            flash('Password must be at least 6 characters.', 'error')
+        is_strong, msg = validate_password_strength(new_password)
+        if not is_strong:
+            flash(msg, 'error')
             return render_template('forgot_password.html')
 
         with get_db() as conn:
@@ -466,12 +621,14 @@ def forgot_password():
                     'UPDATE users SET password_hash = ? WHERE id = ?',
                     (generate_password_hash(new_password), user['id'])
                 )
+                # Invalidate all API tokens for this user on password reset
+                cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
                 conn.commit()
-                audit_logger.info(f"PASSWORD_RESET: username='{username}'")
+                audit_logger.info(f"PASSWORD_RESET: username='{username}', ip='{request.remote_addr}'")
                 flash('Password reset successfully! Please sign in with your new password.', 'success')
                 return redirect(url_for('login'))
             else:
-                logger.warning(f"Failed password reset attempt for username={username}, email={email}")
+                logger.warning(f"Failed password reset attempt, ip: {request.remote_addr}")
                 flash('No account found with that username and email combination.', 'error')
 
     return render_template('forgot_password.html')
@@ -544,14 +701,44 @@ def books():
 def add_book():
     """Add a new book"""
     if request.method == 'POST':
-        title = request.form['title']
-        author = request.form['author']
-        isbn = request.form['isbn']
-        publisher = request.form.get('publisher', '')
+        title = sanitize_string(request.form.get('title', ''), 200)
+        author = sanitize_string(request.form.get('author', ''), 200)
+        isbn = sanitize_string(request.form.get('isbn', ''), 20)
+        publisher = sanitize_string(request.form.get('publisher', ''), 200)
         publication_year = request.form.get('publication_year', None)
-        category = request.form.get('category', '')
-        total_copies = int(request.form.get('total_copies', 1))
-        
+        category = sanitize_string(request.form.get('category', ''), 50)
+        total_copies = request.form.get('total_copies', 1)
+
+        # Validation
+        if not title or len(title) < 1:
+            flash('Title is required.', 'error')
+            return render_template('add_book.html')
+
+        if not author or len(author) < 1:
+            flash('Author is required.', 'error')
+            return render_template('add_book.html')
+
+        if not isbn or not validate_isbn(isbn):
+            flash('Please enter a valid ISBN (10 or 13 digits).', 'error')
+            return render_template('add_book.html')
+
+        if not validate_positive_integer(total_copies, 1000):
+            flash('Total copies must be a number between 1 and 1000.', 'error')
+            return render_template('add_book.html')
+
+        total_copies = int(total_copies)
+
+        # Validate publication year if provided
+        if publication_year:
+            try:
+                year = int(publication_year)
+                if year < 1000 or year > datetime.now().year + 1:
+                    flash('Please enter a valid publication year.', 'error')
+                    return render_template('add_book.html')
+            except ValueError:
+                flash('Publication year must be a valid number.', 'error')
+                return render_template('add_book.html')
+
         try:
             with get_db() as conn:
                 cursor = conn.cursor()
@@ -560,16 +747,17 @@ def add_book():
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (title, author, isbn, publisher, publication_year, category, total_copies, total_copies))
                 conn.commit()
-                audit_logger.info(f"BOOK_CREATED: title='{title}', isbn='{isbn}', author='{author}'")
+                audit_logger.info(f"BOOK_CREATED: isbn='{isbn}', user='{session['username']}'")
             flash('Book added successfully!', 'success')
             return redirect(url_for('books'))
         except sqlite3.IntegrityError:
             logger.warning(f"Failed to add book - ISBN already exists: {isbn}")
             flash('Book with this ISBN already exists!', 'error')
-    
+
     return render_template('add_book.html')
 
 @app.route('/books/edit/<int:book_id>', methods=['GET', 'POST'])
+@login_required
 def edit_book(book_id):
     """Edit a book"""
     with get_db() as conn:
@@ -612,6 +800,7 @@ def edit_book(book_id):
     return render_template('edit_book.html', book=book)
 
 @app.route('/books/delete/<int:book_id>', methods=['POST'])
+@login_required
 def delete_book(book_id):
     """Delete a book"""
     with get_db() as conn:
@@ -635,6 +824,7 @@ def delete_book(book_id):
 
 # Members Management
 @app.route('/members')
+@login_required
 def members():
     """List all members"""
     search = request.args.get('search', '')
@@ -661,14 +851,28 @@ def members():
     return render_template('members.html', members=members, search=search, selected_status=status)
 
 @app.route('/members/add', methods=['GET', 'POST'])
+@login_required
 def add_member():
     """Add a new member"""
     if request.method == 'POST':
-        name = request.form['name']
-        email = request.form['email']
-        phone = request.form.get('phone', '')
-        address = request.form.get('address', '')
-        
+        name = sanitize_string(request.form.get('name', ''), 100)
+        email = sanitize_string(request.form.get('email', ''), 100).lower()
+        phone = sanitize_string(request.form.get('phone', ''), 20)
+        address = sanitize_string(request.form.get('address', ''), 500)
+
+        # Validation
+        if not name or len(name) < 2:
+            flash('Name is required (minimum 2 characters).', 'error')
+            return render_template('add_member.html')
+
+        if not validate_email(email):
+            flash('Please enter a valid email address.', 'error')
+            return render_template('add_member.html')
+
+        if phone and not validate_phone(phone):
+            flash('Please enter a valid phone number.', 'error')
+            return render_template('add_member.html')
+
         try:
             with get_db() as conn:
                 cursor = conn.cursor()
@@ -677,16 +881,17 @@ def add_member():
                     VALUES (?, ?, ?, ?)
                 ''', (name, email, phone, address))
                 conn.commit()
-                audit_logger.info(f"MEMBER_CREATED: name='{name}', email='{email}'")
+                audit_logger.info(f"MEMBER_CREATED: email='{email}', user='{session['username']}'")
             flash('Member added successfully!', 'success')
             return redirect(url_for('members'))
         except sqlite3.IntegrityError:
-            logger.warning(f"Failed to add member - email already exists: {email}")
+            logger.warning(f"Failed to add member - email already exists")
             flash('Member with this email already exists!', 'error')
-    
+
     return render_template('add_member.html')
 
 @app.route('/members/edit/<int:member_id>', methods=['GET', 'POST'])
+@login_required
 def edit_member(member_id):
     """Edit a member"""
     with get_db() as conn:
@@ -718,6 +923,7 @@ def edit_member(member_id):
     return render_template('edit_member.html', member=member)
 
 @app.route('/members/delete/<int:member_id>', methods=['POST'])
+@login_required
 def delete_member(member_id):
     """Delete a member"""
     with get_db() as conn:
@@ -741,6 +947,7 @@ def delete_member(member_id):
 
 # Transactions Management
 @app.route('/transactions')
+@login_required
 def transactions():
     """List all transactions"""
     status = request.args.get('status', '')
@@ -768,6 +975,7 @@ def transactions():
     return render_template('transactions.html', transactions=transactions, selected_status=status)
 
 @app.route('/transactions/issue', methods=['GET', 'POST'])
+@login_required
 def issue_book():
     """Issue a book to a member"""
     if request.method == 'POST':
@@ -812,6 +1020,7 @@ def issue_book():
     return render_template('issue_book.html', books=books, members=members)
 
 @app.route('/transactions/return/<int:transaction_id>', methods=['POST'])
+@login_required
 def return_book(transaction_id):
     """Return a book"""
     return_date = request.form['return_date']
@@ -940,6 +1149,8 @@ def ledger():
 
 # Authentication APIs
 @app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("5 per minute")
+@csrf.exempt
 def api_login():
     """API endpoint for user login - returns API token for mobile apps"""
     data = request.get_json()
@@ -947,8 +1158,11 @@ def api_login():
     if not data or 'username' not in data or 'password' not in data:
         return jsonify({'error': 'Username and password required'}), 400
 
-    username = data['username']
-    password = data['password']
+    username = sanitize_string(data.get('username', ''), 20)
+    password = data.get('password', '')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -960,7 +1174,7 @@ def api_login():
             # Generate API token for mobile app
             api_token = secrets.token_hex(32)
 
-            # Delete old tokens for this user (optional: keep only one active token)
+            # Delete old tokens for this user (keep only one active token)
             cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
 
             # Store the new token
@@ -971,16 +1185,17 @@ def api_login():
             conn.commit()
 
             # Also set session for web compatibility
+            session.permanent = True
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['role'] = user['role']
 
-            audit_logger.info(f"API_LOGIN: username='{username}'")
+            audit_logger.info(f"API_LOGIN: username='{username}', ip='{request.remote_addr}'")
 
             return jsonify({
                 'success': True,
                 'message': 'Login successful',
-                'token': api_token,  # Mobile app uses this token
+                'token': api_token,
                 'user': {
                     'id': user['id'],
                     'username': user['username'],
@@ -989,7 +1204,7 @@ def api_login():
                 }
             }), 200
         else:
-            logger.warning(f"API failed login attempt for username: {username}")
+            logger.warning(f"API failed login attempt, ip: {request.remote_addr}")
             return jsonify({'error': 'Invalid username or password'}), 401
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -1002,6 +1217,8 @@ def api_logout():
     return jsonify({'success': True, 'message': 'Logout successful'}), 200
 
 @app.route('/api/auth/register', methods=['POST'])
+@limiter.limit("3 per minute")
+@csrf.exempt
 def api_register():
     """API endpoint for user registration"""
     data = request.get_json()
@@ -1009,16 +1226,20 @@ def api_register():
     if not data:
         return jsonify({'error': 'Request body required'}), 400
 
-    username = data.get('username', '').strip()
-    email = data.get('email', '').strip().lower()
+    username = sanitize_string(data.get('username', ''), 20)
+    email = sanitize_string(data.get('email', ''), 100).lower()
     password = data.get('password', '')
 
     # Validation
-    if len(username) < 3 or len(username) > 20:
-        return jsonify({'error': 'Username must be between 3 and 20 characters'}), 400
+    if not validate_username(username):
+        return jsonify({'error': 'Username must be 3-20 alphanumeric characters or underscores'}), 400
 
-    if len(password) < 6:
-        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+    if not validate_email(email):
+        return jsonify({'error': 'Please provide a valid email address'}), 400
+
+    is_strong, msg = validate_password_strength(password)
+    if not is_strong:
+        return jsonify({'error': msg}), 400
 
     try:
         with get_db() as conn:
@@ -1028,7 +1249,7 @@ def api_register():
                 VALUES (?, ?, ?, ?)
             ''', (username, generate_password_hash(password), email, 'staff'))
             conn.commit()
-            audit_logger.info(f"API_USER_REGISTERED: username='{username}', email='{email}'")
+            audit_logger.info(f"API_USER_REGISTERED: username='{username}', ip='{request.remote_addr}'")
 
         return jsonify({
             'success': True,
@@ -2013,5 +2234,14 @@ def api_get_fines_summary():
 if __name__ == '__main__':
     logger.info("Starting Library Management System...")
     init_db()
+
+    # Use environment variable for debug mode, default to False for security
+    debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+
+    if debug_mode:
+        logger.warning("Running in DEBUG mode - do not use in production!")
+    else:
+        logger.info("Running in production mode")
+
     logger.info("Server starting on http://0.0.0.0:5000")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=debug_mode, host='0.0.0.0', port=5000)

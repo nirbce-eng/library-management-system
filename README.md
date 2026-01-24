@@ -41,14 +41,22 @@ A comprehensive web-based library management system built with Flask, SQLite, an
 ## Quick Start
 
 ### Default Login Credentials
+
+On first run, the system creates a default admin user:
 - **Username**: `admin`
-- **Password**: `admin123`
+- **Password**: Auto-generated (displayed in console) or set via `ADMIN_PASSWORD` env variable
+
+**Important**: Change the admin password immediately after first login!
 
 ### Option 1: Docker (Recommended)
 
 ```bash
+# Create environment file for production
+echo "SECRET_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')" > .env
+echo "ADMIN_PASSWORD=YourSecurePassword123" >> .env
+
 # Start the application
-docker-compose up -d
+docker-compose --env-file .env up -d
 
 # Access at http://localhost:3000
 
@@ -73,6 +81,10 @@ source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Set environment variables (optional for development)
+export FLASK_DEBUG=true
+export SECRET_KEY=dev-secret-key
 
 # Run application
 python app.py
@@ -329,15 +341,14 @@ docker cp ./backup/library.db library-management-system:/app/data/
 ### Environment Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
+| SECRET_KEY | Auto-generated | **Required for production** - Flask session secret |
+| ADMIN_PASSWORD | Auto-generated | Initial admin user password |
+| ALLOWED_ORIGINS | localhost:3000,5000 | Comma-separated CORS origins |
 | FLASK_APP | app.py | Flask application |
 | FLASK_ENV | production | Environment mode |
+| FLASK_DEBUG | false | Enable debug mode (never in production!) |
 
 ### Customization
-
-**Change Secret Key** (app.py):
-```python
-app.secret_key = 'your-secure-secret-key'
-```
 
 **Adjust Fine Rate** (app.py):
 ```python
@@ -347,6 +358,14 @@ fine = overdue_days * 1.0  # $1 per day
 **Change Default Loan Period** (templates/issue_book.html):
 ```html
 <input type="number" name="due_days" value="14" min="1" max="90">
+```
+
+**Configure Rate Limits** (app.py):
+```python
+limiter = Limiter(
+    app=app,
+    default_limits=["200 per day", "50 per hour"]
+)
 ```
 
 ## Troubleshooting
@@ -376,24 +395,55 @@ ports:
 - CORS is enabled for `/api/*` endpoints
 - Ensure mobile app uses correct API URL
 
-## Security Considerations
+## Security Features
 
-For production deployment:
-1. Change the Flask secret key
-2. Use environment variables for sensitive config
-3. Enable HTTPS with SSL certificate
-4. Set `debug=False` in production
-5. Use a production WSGI server (gunicorn, uWSGI)
-6. Regular database backups
-7. Monitor audit logs for suspicious activity
+This application includes comprehensive security measures:
+
+### Authentication & Authorization
+- **Rate Limiting**: Login (5/min), Registration (3/min), Password reset (3/min)
+- **Strong Password Policy**: Minimum 8 characters, must include letters and numbers
+- **Session Security**: HTTPOnly, Secure (HTTPS), SameSite cookies
+- **Token Invalidation**: API tokens revoked on password change
+- **Role-based Access Control**: Admin and Staff roles
+
+### Input Validation
+- All inputs sanitized and validated
+- ISBN, email, phone format validation
+- SQL injection prevention via parameterized queries
+
+### Security Headers
+- X-Content-Type-Options, X-Frame-Options, X-XSS-Protection
+- Content-Security-Policy, Referrer-Policy
+- Cache-Control for sensitive pages
+
+### CSRF Protection
+- Flask-WTF CSRF tokens on all forms
+- API endpoints use token authentication
+
+### Docker Security
+- Non-root user execution
+- Read-only filesystem
+- No privilege escalation
+
+See [SECURITY.md](SECURITY.md) for complete security documentation.
+
+### Production Deployment Checklist
+
+1. **Required**: Set `SECRET_KEY` environment variable
+2. **Required**: Set `ADMIN_PASSWORD` environment variable
+3. Configure `ALLOWED_ORIGINS` for your domain
+4. Enable HTTPS via reverse proxy (nginx/traefik)
+5. Regular database backups
+6. Monitor `logs/audit.log` for suspicious activity
 
 ## Tech Stack
 
-- **Backend**: Python 3.11, Flask 3.0, Flask-CORS
+- **Backend**: Python 3.11, Flask 3.0, Flask-CORS, Flask-WTF, Flask-Limiter
 - **Database**: SQLite
 - **Frontend**: HTML5, CSS3, JavaScript
-- **Authentication**: Werkzeug password hashing, API tokens
-- **Containerization**: Docker, Docker Compose
+- **Authentication**: Werkzeug password hashing, API tokens, CSRF protection
+- **Security**: Rate limiting, input validation, security headers
+- **Containerization**: Docker, Docker Compose, Gunicorn
 - **Logging**: Python logging with RotatingFileHandler
 
 ## License
