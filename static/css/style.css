@@ -1001,8 +1001,8 @@ body {
     padding: 0.75rem 1.5rem;
 }
 
-/* Modal */
-.modal-overlay {
+/* Chat Modal */
+.chat-modal-overlay {
     position: fixed;
     top: 0;
     left: 0;
@@ -1015,7 +1015,7 @@ body {
     z-index: 2000;
 }
 
-.modal {
+.chat-modal {
     background: white;
     border-radius: 16px;
     width: 100%;
@@ -1025,7 +1025,7 @@ body {
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
 }
 
-.modal-header {
+.chat-modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1033,12 +1033,13 @@ body {
     border-bottom: 1px solid var(--border);
 }
 
-.modal-header h3 {
+.chat-modal-header h3 {
     font-size: 1.1rem;
     color: var(--text);
+    margin: 0;
 }
 
-.modal-close {
+.chat-modal-close {
     background: none;
     border: none;
     font-size: 1.5rem;
@@ -1047,11 +1048,11 @@ body {
     line-height: 1;
 }
 
-.modal-close:hover {
+.chat-modal-close:hover {
     color: var(--text);
 }
 
-.modal-body {
+.chat-modal-body {
     padding: 1rem;
     max-height: 400px;
     overflow-y: auto;
@@ -1117,6 +1118,31 @@ body {
 .btn-sm {
     padding: 0.5rem 1rem;
     font-size: 0.85rem;
+}
+
+/* Role Badges */
+.role-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 0.5rem;
+}
+
+.role-admin {
+    background: rgba(39, 174, 96, 0.15);
+    color: var(--success);
+}
+
+.role-staff {
+    background: rgba(52, 152, 219, 0.15);
+    color: var(--info);
+}
+
+.admin-avatar.admin-role {
+    background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
 }
 
 /* Chat Responsive */

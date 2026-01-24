@@ -5,8 +5,8 @@
 {% block content %}
 <div class="chat-container">
     <div class="page-header">
-        <h1 class="page-title">Admin Chat</h1>
-        <p class="page-subtitle">Communicate with other administrators</p>
+        <h1 class="page-title">Chat</h1>
+        <p class="page-subtitle">Communicate with other librarians</p>
     </div>
 
     <div class="chat-layout">
@@ -48,15 +48,15 @@
 </div>
 
 <!-- New Chat Modal -->
-<div class="modal-overlay" id="newChatModal" style="display: none;">
-    <div class="modal">
-        <div class="modal-header">
+<div class="chat-modal-overlay" id="newChatModal" style="display: none;">
+    <div class="chat-modal">
+        <div class="chat-modal-header">
             <h3>Start New Conversation</h3>
-            <button class="modal-close" id="closeModal">&times;</button>
+            <button class="chat-modal-close" id="closeModal">&times;</button>
         </div>
-        <div class="modal-body">
+        <div class="chat-modal-body">
             <div class="admin-list" id="adminList">
-                <p>Loading admins...</p>
+                <p>Loading users...</p>
             </div>
         </div>
     </div>
@@ -269,14 +269,14 @@ async function openNewChatModal() {
     document.getElementById('newChatModal').style.display = 'flex';
 
     try {
-        const response = await fetch('/api/chat/admins');
+        const response = await fetch('/api/chat/users');
         const data = await response.json();
 
         if (data.success) {
-            renderAdminList(data.admins);
+            renderUserList(data.users);
         }
     } catch (error) {
-        console.error('Failed to load admins:', error);
+        console.error('Failed to load users:', error);
     }
 }
 
@@ -284,20 +284,20 @@ function closeNewChatModal() {
     document.getElementById('newChatModal').style.display = 'none';
 }
 
-function renderAdminList(admins) {
+function renderUserList(users) {
     const container = document.getElementById('adminList');
 
-    if (admins.length === 0) {
-        container.innerHTML = '<p class="text-muted">No other admins available</p>';
+    if (users.length === 0) {
+        container.innerHTML = '<p class="text-muted">No other users available</p>';
         return;
     }
 
-    container.innerHTML = admins.map(admin => `
-        <div class="admin-item" onclick="startChatWith(${admin.id}, '${admin.username}')">
-            <div class="admin-avatar">${admin.username[0].toUpperCase()}</div>
+    container.innerHTML = users.map(user => `
+        <div class="admin-item" onclick="startChatWith(${user.id}, '${user.username}')">
+            <div class="admin-avatar ${user.role === 'admin' ? 'admin-role' : ''}">${user.username[0].toUpperCase()}</div>
             <div class="admin-info">
-                <div class="admin-name">${admin.username}</div>
-                <div class="admin-email">${admin.email}</div>
+                <div class="admin-name">${user.username} <span class="role-badge role-${user.role}">${user.role}</span></div>
+                <div class="admin-email">${user.email}</div>
             </div>
         </div>
     `).join('');

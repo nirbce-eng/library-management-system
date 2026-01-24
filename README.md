@@ -1,6 +1,6 @@
 # Library Management System
 
-A comprehensive web-based library management system built with Flask, SQLite, and modern web technologies. Features user authentication, comprehensive logging, and a modern responsive UI.
+A comprehensive web-based library management system built with Flask, SQLite, and modern web technologies. Features user authentication, staff chat, fines ledger, comprehensive logging, and a modern responsive UI.
 
 ## Features
 
@@ -13,26 +13,30 @@ A comprehensive web-based library management system built with Flask, SQLite, an
 - **Advanced Search**: Search books by title, author, or ISBN
 - **Category Filtering**: Filter books by category
 
+### Admin Features
+- **Fines Ledger**: Track all collected overdue fines with summary statistics
+- **Staff Chat**: Real-time messaging between staff members
+- **User Management**: Role-based access control (admin/staff)
+
 ### Authentication System
 - **User Login/Logout**: Secure session-based authentication
 - **User Registration**: Create new staff accounts
 - **Change Password**: Update password while logged in
 - **Forgot Password**: Reset password using username + email verification
+- **API Token Auth**: Token-based authentication for mobile apps
 - **Role-based Access**: Admin and staff roles
+
+### Mobile API
+- Complete REST API for mobile app integration
+- Token-based authentication
+- Full CRUD operations for all entities
+- Chat and ledger endpoints
 
 ### Logging & Audit Trail
 - **Request Logging**: All HTTP requests logged with timing
 - **Audit Trail**: Track all CRUD operations (books, members, transactions)
 - **Error Logging**: Separate error log for debugging
 - **Rotating Log Files**: Automatic log rotation (10MB max, 5 backups)
-
-### Technical Features
-- Responsive modern UI with dark theme
-- RESTful API endpoints
-- SQLite database with proper relationships
-- Docker support with persistent volumes
-- Input validation and error handling
-- Flash messages for user feedback
 
 ## Quick Start
 
@@ -44,15 +48,15 @@ A comprehensive web-based library management system built with Flask, SQLite, an
 
 ```bash
 # Start the application
-docker compose up -d
+docker-compose up -d
 
 # Access at http://localhost:3000
 
 # View logs
-docker compose logs -f
+docker-compose logs -f
 
 # Stop
-docker compose down
+docker-compose down
 ```
 
 ### Option 2: Local Development
@@ -111,7 +115,9 @@ library-management-system/
     ├── add_member.html        # Add member form
     ├── edit_member.html       # Edit member form
     ├── transactions.html      # Transactions listing
-    └── issue_book.html        # Issue book form
+    ├── issue_book.html        # Issue book form
+    ├── chat.html              # Staff chat (admin)
+    └── ledger.html            # Fines ledger (admin)
 ```
 
 ## Database Schema
@@ -165,61 +171,142 @@ library-management-system/
 | fine_amount | REAL | Fine amount |
 | created_at | TIMESTAMP | Creation time |
 
+### Chat Messages Table
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER | Primary key |
+| sender_id | INTEGER | FK to users |
+| receiver_id | INTEGER | FK to users |
+| message | TEXT | Message content |
+| is_read | INTEGER | Read status (0/1) |
+| created_at | TIMESTAMP | Creation time |
+
+### API Tokens Table
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER | Primary key |
+| user_id | INTEGER | FK to users |
+| token | TEXT | Unique API token |
+| created_at | TIMESTAMP | Creation time |
+
 ## API Endpoints
 
-### Complete REST API (24 endpoints)
-
-**Documentation:** See [MOBILE_API.md](MOBILE_API.md) for complete mobile API documentation.
-
-#### Authentication APIs (4)
+### Authentication APIs
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/auth/login` | Login (JSON response) |
-| POST | `/api/auth/logout` | Logout (JSON response) |
-| POST | `/api/auth/register` | Register user (JSON response) |
+| POST | `/api/auth/login` | Login, returns API token |
+| POST | `/api/auth/logout` | Logout |
+| POST | `/api/auth/register` | Register user |
 | GET | `/api/auth/me` | Get current user info |
 
-#### Dashboard API (1)
+### Dashboard API
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/dashboard` | Get library statistics |
 
-#### Books APIs (7)
+### Books APIs
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/books` | List books (with pagination) |
+| GET | `/api/books` | List books (paginated) |
 | GET | `/api/books/<id>` | Get single book |
-| GET | `/api/books/search?q={query}` | Quick search books |
+| GET | `/api/books/search?q={query}` | Search books |
 | POST | `/api/books` | Create book |
 | PUT | `/api/books/<id>` | Update book |
 | DELETE | `/api/books/<id>` | Delete book |
 
-#### Members APIs (7)
+### Members APIs
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/members` | List members (with pagination) |
+| GET | `/api/members` | List members (paginated) |
 | GET | `/api/members/<id>` | Get single member |
-| GET | `/api/members/search?q={query}` | Quick search members |
+| GET | `/api/members/search?q={query}` | Search members |
 | POST | `/api/members` | Create member |
 | PUT | `/api/members/<id>` | Update member |
 | DELETE | `/api/members/<id>` | Delete member |
 
-#### Transactions APIs (5)
+### Transactions APIs
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/transactions` | List transactions (with pagination) |
+| GET | `/api/transactions` | List transactions (paginated) |
 | GET | `/api/transactions/<id>` | Get single transaction |
 | POST | `/api/transactions/issue` | Issue book |
 | POST | `/api/transactions/<id>/return` | Return book |
 
-### Web Routes (for browser access)
+### Chat APIs
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET/POST | `/login` | User login page |
-| GET | `/logout` | User logout |
-| GET/POST | `/register` | User registration page |
-| GET/POST | `/change-password` | Change password page |
-| GET/POST | `/forgot-password` | Reset password page |
+| GET | `/api/chat/users` | List available chat users |
+| GET | `/api/chat/conversations` | Get conversation list |
+| GET | `/api/chat/messages/<user_id>` | Get messages with user |
+| POST | `/api/chat/messages` | Send message |
+| GET | `/api/chat/unread-count` | Get unread message count |
+
+### Ledger APIs (Admin Only)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/ledger/fines` | Get all collected fines |
+| GET | `/api/ledger/summary` | Get fines summary by period |
+
+## Docker Deployment
+
+### Docker Compose (Recommended)
+
+```bash
+# Build and start
+docker-compose up -d
+
+# View logs
+docker-compose logs -f library-app
+
+# Stop
+docker-compose down
+
+# Rebuild after code changes
+docker-compose up -d --build
+
+# Stop and remove volumes (reset database)
+docker-compose down -v
+```
+
+### Docker Commands
+
+```bash
+# Build image
+docker build -t library-management-system .
+
+# Run container
+docker run -d \
+  --name library-app \
+  -p 3000:5000 \
+  -v library-data:/app/data \
+  -v library-logs:/app/logs \
+  library-management-system
+
+# View logs
+docker logs -f library-app
+
+# Access shell
+docker exec -it library-app /bin/bash
+
+# Stop
+docker stop library-app
+```
+
+### Data Persistence
+
+Docker volumes are used for persistent storage:
+- `library-data` - SQLite database
+- `library-logs` - Application logs
+
+**Backup database:**
+```bash
+docker cp library-management-system:/app/data/library.db ./backup/
+```
+
+**Restore database:**
+```bash
+docker cp ./backup/library.db library-management-system:/app/data/
+```
 
 ## Logging
 
@@ -229,17 +316,13 @@ library-management-system/
 - **audit.log**: Audit trail for security-sensitive operations
 
 ### Audit Events Logged
-- `USER_LOGIN` / `USER_LOGOUT`
-- `USER_REGISTERED`
+- `USER_LOGIN` / `USER_LOGOUT` / `API_LOGIN` / `API_LOGOUT`
+- `USER_REGISTERED` / `API_USER_REGISTERED`
 - `PASSWORD_CHANGED` / `PASSWORD_RESET`
 - `BOOK_CREATED` / `BOOK_UPDATED` / `BOOK_DELETED`
 - `MEMBER_CREATED` / `MEMBER_UPDATED` / `MEMBER_DELETED`
 - `BOOK_ISSUED` / `BOOK_RETURNED`
-
-### Log Format
-```
-2026-01-21 12:00:00,000 - library.audit - INFO - BOOK_CREATED: title='Python Guide', isbn='123456'
-```
+- `CHAT_MESSAGE_SENT`
 
 ## Configuration
 
@@ -256,7 +339,7 @@ library-management-system/
 app.secret_key = 'your-secure-secret-key'
 ```
 
-**Adjust Fine Rate** (app.py, line ~614):
+**Adjust Fine Rate** (app.py):
 ```python
 fine = overdue_days * 1.0  # $1 per day
 ```
@@ -264,37 +347,6 @@ fine = overdue_days * 1.0  # $1 per day
 **Change Default Loan Period** (templates/issue_book.html):
 ```html
 <input type="number" name="due_days" value="14" min="1" max="90">
-```
-
-## Docker Configuration
-
-### Volumes
-- `library-data`: Database persistence
-- `library-logs`: Log file persistence
-
-### Ports
-- Container port: 5000
-- Host port: 3000 (configurable in docker-compose.yml)
-
-### Commands
-```bash
-# Build and start
-docker compose up --build -d
-
-# View logs
-docker compose logs -f library-app
-
-# Access container shell
-docker exec -it library-management-system /bin/bash
-
-# Restart
-docker compose restart
-
-# Stop and remove
-docker compose down
-
-# Stop and remove with volumes
-docker compose down -v
 ```
 
 ## Troubleshooting
@@ -305,22 +357,24 @@ docker compose down -v
 - Verify password hash in users table
 
 ### Database Errors
-- Delete `library.db` to recreate fresh database
+- Delete `data/library.db` to recreate fresh database
 - Check file permissions on database file
 
 ### Docker Issues
 - Ensure Docker Desktop is running
-- Check logs: `docker compose logs`
-- Rebuild: `docker compose up --build`
+- Check logs: `docker-compose logs`
+- Rebuild: `docker-compose up --build`
 
 ### Port Already in Use
 ```bash
-# Find process using port
-netstat -ano | findstr :5000
-
-# Kill process (Windows)
-taskkill /PID <pid> /F
+# Change port in docker-compose.yml
+ports:
+  - "3001:5000"  # Use port 3001 instead
 ```
+
+### CORS Issues (Mobile App)
+- CORS is enabled for `/api/*` endpoints
+- Ensure mobile app uses correct API URL
 
 ## Security Considerations
 
@@ -335,10 +389,10 @@ For production deployment:
 
 ## Tech Stack
 
-- **Backend**: Python 3.11, Flask 3.0
+- **Backend**: Python 3.11, Flask 3.0, Flask-CORS
 - **Database**: SQLite
 - **Frontend**: HTML5, CSS3, JavaScript
-- **Authentication**: Werkzeug password hashing
+- **Authentication**: Werkzeug password hashing, API tokens
 - **Containerization**: Docker, Docker Compose
 - **Logging**: Python logging with RotatingFileHandler
 

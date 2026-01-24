@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Ledger - Library Management System{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Fines Ledger</h1>
+            <p class="page-subtitle">Track overdue fines collected</p>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card stat-primary">
+            <div class="stat-icon">$</div>
+            <div class="stat-content">
+                <span class="stat-value">${{ "%.2f"|format(today_fines) }}</span>
+                <span class="stat-label">Today</span>
+            </div>
+        </div>
+        <div class="stat-card stat-success">
+            <div class="stat-icon">$</div>
+            <div class="stat-content">
+                <span class="stat-value">${{ "%.2f"|format(week_fines) }}</span>
+                <span class="stat-label">This Week</span>
+            </div>
+        </div>
+        <div class="stat-card stat-info">
+            <div class="stat-icon">$</div>
+            <div class="stat-content">
+                <span class="stat-value">${{ "%.2f"|format(month_fines) }}</span>
+                <span class="stat-label">This Month</span>
+            </div>
+        </div>
+        <div class="stat-card stat-warning">
+            <div class="stat-icon">$</div>
+            <div class="stat-content">
+                <span class="stat-value">${{ "%.2f"|format(total_fines) }}</span>
+                <span class="stat-label">All Time</span>
+            </div>
+        </div>
+    </div>
+
+    {% if pending_overdue > 0 %}
+    <div class="info-box" style="margin-bottom: 1.5rem; border-left-color: var(--secondary);">
+        <strong>{{ pending_overdue }}</strong> book(s) currently overdue with pending fines
+    </div>
+    {% endif %}
+
+    {% if fines %}
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Book</th>
+                    <th>Member</th>
+                    <th>Issue Date</th>
+                    <th>Due Date</th>
+                    <th>Return Date</th>
+                    <th>Days Overdue</th>
+                    <th>Fine Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for fine in fines %}
+                <tr>
+                    <td><span class="mono">#{{ fine.transaction_id }}</span></td>
+                    <td>
+                        <strong>{{ fine.book_title }}</strong>
+                        <small class="text-muted">ISBN: {{ fine.isbn }}</small>
+                    </td>
+                    <td>
+                        {{ fine.member_name }}
+                        <small class="text-muted">{{ fine.member_email }}</small>
+                    </td>
+                    <td>{{ fine.issue_date }}</td>
+                    <td>{{ fine.due_date }}</td>
+                    <td>{{ fine.return_date }}</td>
+                    <td>
+                        <span class="status-badge" style="background: rgba(243, 156, 18, 0.15); color: var(--secondary);">{{ fine.days_overdue|int }} days</span>
+                    </td>
+                    <td>
+                        <span class="fine-amount">${{ "%.2f"|format(fine.fine_amount) }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr style="background: var(--bg-hover);">
+                    <td colspan="7" style="text-align: right; font-weight: 600; border-top: 2px solid var(--border);">Total Collected:</td>
+                    <td style="border-top: 2px solid var(--border);"><span class="fine-amount">${{ "%.2f"|format(total_fines) }}</span></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">💰</div>
+        <p class="empty-text">No fines collected yet</p>
+        <p style="color: var(--text-muted);">Fines will appear here when overdue books are returned</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -4,6 +4,7 @@ A comprehensive web application for managing library operations
 """
 
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, session
+from flask_cors import CORS
 import sqlite3
 from datetime import datetime, timedelta
 from contextlib import contextmanager
@@ -17,6 +18,9 @@ import secrets
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-in-production'
+
+# Enable CORS for API routes
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
 # Data and log directories
 DATA_DIR = 'data'
@@ -863,6 +867,75 @@ def chat():
     """Admin chat page"""
     return render_template('chat.html')
 
+# Ledger Web Route
+@app.route('/ledger')
+@admin_required
+def ledger():
+    """Admin ledger page showing collected fines"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Get all returned transactions with fines
+        fines = cursor.execute('''
+            SELECT
+                t.id as transaction_id,
+                t.fine_amount,
+                t.return_date,
+                t.issue_date,
+                t.due_date,
+                b.title as book_title,
+                b.isbn,
+                m.name as member_name,
+                m.email as member_email,
+                julianday(t.return_date) - julianday(t.due_date) as days_overdue
+            FROM transactions t
+            JOIN books b ON t.book_id = b.id
+            JOIN members m ON t.member_id = m.id
+            WHERE t.status = 'returned' AND t.fine_amount > 0
+            ORDER BY t.return_date DESC
+        ''').fetchall()
+
+        # Today's fines
+        today_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+            AND date(return_date) = date('now')
+        ''').fetchone()[0]
+
+        # This week's fines
+        week_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+            AND return_date >= date('now', '-7 days')
+        ''').fetchone()[0]
+
+        # This month's fines
+        month_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+            AND strftime('%Y-%m', return_date) = strftime('%Y-%m', 'now')
+        ''').fetchone()[0]
+
+        # Total all-time fines
+        total_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+        ''').fetchone()[0]
+
+        # Currently overdue books (pending fines)
+        pending_overdue = cursor.execute('''
+            SELECT COUNT(*) FROM transactions
+            WHERE status = 'issued' AND due_date < date('now')
+        ''').fetchone()[0]
+
+    return render_template('ledger.html',
+                           fines=fines,
+                           today_fines=today_fines,
+                           week_fines=week_fines,
+                           month_fines=month_fines,
+                           total_fines=total_fines,
+                           pending_overdue=pending_overdue)
+
 # API endpoints
 
 # Authentication APIs
@@ -1642,28 +1715,28 @@ def api_return_book(transaction_id):
         }
     }), 200
 
-# ==================== Admin Chat API ====================
+# ==================== Chat API (All Users) ====================
 
-@app.route('/api/chat/admins')
-@admin_required
-def api_get_admin_users():
-    """Get list of admin users for chat (excluding current user)"""
+@app.route('/api/chat/users')
+@login_required
+def api_get_chat_users():
+    """Get list of all users for chat (excluding current user)"""
     with get_db() as conn:
         cursor = conn.cursor()
-        admins = cursor.execute('''
-            SELECT id, username, email
+        users = cursor.execute('''
+            SELECT id, username, email, role
             FROM users
-            WHERE role = 'admin' AND id != ?
+            WHERE id != ?
             ORDER BY username
         ''', (session['user_id'],)).fetchall()
 
         return jsonify({
             'success': True,
-            'admins': [dict(admin) for admin in admins]
+            'users': [dict(user) for user in users]
         })
 
 @app.route('/api/chat/conversations')
-@admin_required
+@login_required
 def api_get_conversations():
     """Get list of conversations for current user with last message preview"""
     current_user_id = session['user_id']
@@ -1677,6 +1750,7 @@ def api_get_conversations():
                 u.id as user_id,
                 u.username,
                 u.email,
+                u.role,
                 m.message as last_message,
                 m.created_at as last_message_time,
                 m.sender_id as last_sender_id,
@@ -1708,7 +1782,6 @@ def api_get_conversations():
                 FROM chat_messages
                 WHERE sender_id = ? OR receiver_id = ?
             ) m ON u.id = m.partner_id AND m.rn = 1
-            WHERE u.role = 'admin'
             ORDER BY m.created_at DESC
         ''', (current_user_id, current_user_id, current_user_id,
               current_user_id, current_user_id)).fetchall()
@@ -1719,7 +1792,7 @@ def api_get_conversations():
         })
 
 @app.route('/api/chat/messages/<int:user_id>')
-@admin_required
+@login_required
 def api_get_messages(user_id):
     """Get all messages between current user and specified user"""
     current_user_id = session['user_id']
@@ -1730,14 +1803,14 @@ def api_get_messages(user_id):
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Verify the other user is an admin
+        # Verify the other user exists
         other_user = cursor.execute(
-            'SELECT id, username, role FROM users WHERE id = ? AND role = ?',
-            (user_id, 'admin')
+            'SELECT id, username, role FROM users WHERE id = ?',
+            (user_id,)
         ).fetchone()
 
         if not other_user:
-            return jsonify({'error': 'User not found or not an admin'}), 404
+            return jsonify({'error': 'User not found'}), 404
 
         # Get messages
         if since:
@@ -1774,9 +1847,9 @@ def api_get_messages(user_id):
         })
 
 @app.route('/api/chat/messages', methods=['POST'])
-@admin_required
+@login_required
 def api_send_message():
-    """Send a message to another admin user"""
+    """Send a message to another user"""
     data = request.get_json()
 
     if not data:
@@ -1793,14 +1866,14 @@ def api_send_message():
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Verify receiver is an admin
+        # Verify receiver exists
         receiver = cursor.execute(
-            'SELECT id, role FROM users WHERE id = ? AND role = ?',
-            (receiver_id, 'admin')
+            'SELECT id FROM users WHERE id = ?',
+            (receiver_id,)
         ).fetchone()
 
         if not receiver:
-            return jsonify({'error': 'Receiver not found or not an admin'}), 404
+            return jsonify({'error': 'Receiver not found'}), 404
 
         # Insert message
         cursor.execute('''
@@ -1827,7 +1900,7 @@ def api_send_message():
         }), 201
 
 @app.route('/api/chat/unread-count')
-@admin_required
+@login_required
 def api_get_unread_count():
     """Get total unread message count for current user"""
     current_user_id = session['user_id']
@@ -1842,6 +1915,99 @@ def api_get_unread_count():
         return jsonify({
             'success': True,
             'unread_count': count
+        })
+
+# ==================== Ledger API (Admin Only) ====================
+
+@app.route('/api/ledger/fines')
+@admin_required
+def api_get_fines_ledger():
+    """Get ledger of all collected overdue fines (admin only)"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Get all returned transactions with fines
+        fines = cursor.execute('''
+            SELECT
+                t.id as transaction_id,
+                t.fine_amount,
+                t.return_date,
+                t.issue_date,
+                t.due_date,
+                b.title as book_title,
+                b.isbn,
+                m.name as member_name,
+                m.email as member_email,
+                julianday(t.return_date) - julianday(t.due_date) as days_overdue
+            FROM transactions t
+            JOIN books b ON t.book_id = b.id
+            JOIN members m ON t.member_id = m.id
+            WHERE t.status = 'returned' AND t.fine_amount > 0
+            ORDER BY t.return_date DESC
+        ''').fetchall()
+
+        # Calculate totals
+        total_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+        ''').fetchone()[0]
+
+        total_count = len(fines)
+
+        return jsonify({
+            'success': True,
+            'fines': [dict(fine) for fine in fines],
+            'total_fines': total_fines,
+            'total_count': total_count
+        })
+
+@app.route('/api/ledger/summary')
+@admin_required
+def api_get_fines_summary():
+    """Get summary of fines by period (admin only)"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Today's fines
+        today_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+            AND date(return_date) = date('now')
+        ''').fetchone()[0]
+
+        # This week's fines
+        week_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+            AND return_date >= date('now', '-7 days')
+        ''').fetchone()[0]
+
+        # This month's fines
+        month_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+            AND strftime('%Y-%m', return_date) = strftime('%Y-%m', 'now')
+        ''').fetchone()[0]
+
+        # Total all-time fines
+        total_fines = cursor.execute('''
+            SELECT COALESCE(SUM(fine_amount), 0) FROM transactions
+            WHERE status = 'returned' AND fine_amount > 0
+        ''').fetchone()[0]
+
+        # Currently overdue books (pending fines)
+        pending_fines = cursor.execute('''
+            SELECT COUNT(*) FROM transactions
+            WHERE status = 'issued' AND due_date < date('now')
+        ''').fetchone()[0]
+
+        return jsonify({
+            'success': True,
+            'today_fines': today_fines,
+            'week_fines': week_fines,
+            'month_fines': month_fines,
+            'total_fines': total_fines,
+            'pending_overdue_count': pending_fines
         })
 
 if __name__ == '__main__':
