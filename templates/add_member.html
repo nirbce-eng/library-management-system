@@ -11,6 +11,7 @@
 
     <div class="form-container">
         <form method="post" class="form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-row">
                 <div class="form-group">
                     <label for="name" class="form-label">Full Name *</label>
