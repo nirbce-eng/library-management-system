@@ -35,19 +35,44 @@ app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # CSRF token valid for 1 hour
 # Initialize CSRF protection
 csrf = CSRFProtect(app)
 
-# Initialize rate limiter
+# Initialize rate limiter (exempt OPTIONS preflight requests)
+def rate_limit_request_filter():
+    """Exempt OPTIONS requests from rate limiting for CORS preflight"""
+    return request.method == 'OPTIONS'
+
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://"
+    storage_uri="memory://",
+    default_limits_exempt_when=rate_limit_request_filter
 )
 
 # Get allowed origins from environment or use default
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5000').split(',')
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5000,http://localhost:8080').split(',')
 
 # Enable CORS for API routes with restricted origins
-CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=True)
+CORS(app, resources={r"/api/*": {
+    "origins": ALLOWED_ORIGINS,
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+    "supports_credentials": True
+}})
+
+# Explicit catch-all OPTIONS handler for CORS preflight
+@app.route('/api/<path:path>', methods=['OPTIONS'])
+@csrf.exempt
+def api_options_handler(path):
+    """Handle CORS preflight requests for all API routes"""
+    origin = request.headers.get('Origin')
+    if origin in ALLOWED_ORIGINS:
+        response = app.make_default_options_response()
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+        return response
+    return '', 403
 
 # Exempt API routes from CSRF (they use token authentication)
 csrf.exempt('api_login')
@@ -246,20 +271,41 @@ logger, audit_logger = setup_logging()
 # Request/Response logging middleware
 @app.before_request
 def before_request():
-    """Log incoming requests and start timing"""
+    """Log incoming requests and start timing, handle CORS preflight"""
     g.start_time = time.time()
     logger.info(f"Request: {request.method} {request.path} - IP: {request.remote_addr}")
     if request.args:
         logger.debug(f"Query params: {dict(request.args)}")
 
+    # Handle CORS preflight requests immediately
+    if request.method == 'OPTIONS' and request.path.startswith('/api/'):
+        origin = request.headers.get('Origin')
+        if origin in ALLOWED_ORIGINS:
+            response = app.make_default_options_response()
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+            return response
+
 @app.after_request
 def after_request(response):
-    """Log response details and timing"""
+    """Log response details and timing, add CORS headers for API routes"""
     duration = time.time() - g.get('start_time', time.time())
     logger.info(
         f"Response: {request.method} {request.path} - "
         f"Status: {response.status_code} - Duration: {duration:.3f}s"
     )
+
+    # Ensure CORS headers are set for API routes
+    if request.path.startswith('/api/'):
+        origin = request.headers.get('Origin')
+        if origin in ALLOWED_ORIGINS:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+
     return response
 
 @app.errorhandler(Exception)
@@ -539,55 +585,10 @@ def logout():
     return redirect(url_for('login'))
 
 @app.route('/register', methods=['GET', 'POST'])
-@limiter.limit("3 per minute", methods=["POST"])
 def register():
-    """User registration"""
-    if 'user_id' in session:
-        return redirect(url_for('index'))
-
-    if request.method == 'POST':
-        username = sanitize_string(request.form.get('username', ''), 20)
-        email = sanitize_string(request.form.get('email', ''), 100).lower()
-        password = request.form.get('password', '')
-        confirm_password = request.form.get('confirm_password', '')
-
-        # Validation
-        if not validate_username(username):
-            flash('Username must be 3-20 alphanumeric characters or underscores.', 'error')
-            return render_template('register.html')
-
-        if not validate_email(email):
-            flash('Please enter a valid email address.', 'error')
-            return render_template('register.html')
-
-        if password != confirm_password:
-            flash('Passwords do not match.', 'error')
-            return render_template('register.html')
-
-        is_strong, msg = validate_password_strength(password)
-        if not is_strong:
-            flash(msg, 'error')
-            return render_template('register.html')
-
-        try:
-            with get_db() as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO users (username, password_hash, email, role)
-                    VALUES (?, ?, ?, ?)
-                ''', (username, generate_password_hash(password), email, 'staff'))
-                conn.commit()
-                audit_logger.info(f"USER_REGISTERED: username='{username}', ip='{request.remote_addr}'")
-            flash('Account created successfully! Please sign in.', 'success')
-            return redirect(url_for('login'))
-        except sqlite3.IntegrityError as e:
-            if 'username' in str(e).lower():
-                flash('Username already exists.', 'error')
-            else:
-                flash('Email already exists.', 'error')
-            logger.warning(f"Registration failed for username={username}: integrity error")
-
-    return render_template('register.html')
+    """User registration - disabled, users must be created by admin via User Management"""
+    flash('Public registration is disabled. Please contact an administrator.', 'warning')
+    return redirect(url_for('login'))
 
 @app.route('/change-password', methods=['GET', 'POST'])
 @login_required
@@ -1271,8 +1272,8 @@ def ledger():
 # API endpoints
 
 # Authentication APIs
-@app.route('/api/auth/login', methods=['POST'])
-@limiter.limit("5 per minute")
+@app.route('/api/auth/login', methods=['POST', 'OPTIONS'])
+@limiter.limit("5 per minute", methods=["POST"])
 @csrf.exempt
 def api_login():
     """API endpoint for user login - returns API token for mobile apps"""
@@ -1331,7 +1332,7 @@ def api_login():
             logger.warning(f"API failed login attempt, ip: {request.remote_addr}")
             return jsonify({'error': 'Invalid username or password'}), 401
 
-@app.route('/api/auth/logout', methods=['POST'])
+@app.route('/api/auth/logout', methods=['POST', 'OPTIONS'])
 @login_required
 def api_logout():
     """API endpoint for user logout"""
@@ -1340,55 +1341,11 @@ def api_logout():
     audit_logger.info(f"API_LOGOUT: username='{username}'")
     return jsonify({'success': True, 'message': 'Logout successful'}), 200
 
-@app.route('/api/auth/register', methods=['POST'])
-@limiter.limit("3 per minute")
+@app.route('/api/auth/register', methods=['POST', 'OPTIONS'])
 @csrf.exempt
 def api_register():
-    """API endpoint for user registration"""
-    data = request.get_json()
-
-    if not data:
-        return jsonify({'error': 'Request body required'}), 400
-
-    username = sanitize_string(data.get('username', ''), 20)
-    email = sanitize_string(data.get('email', ''), 100).lower()
-    password = data.get('password', '')
-
-    # Validation
-    if not validate_username(username):
-        return jsonify({'error': 'Username must be 3-20 alphanumeric characters or underscores'}), 400
-
-    if not validate_email(email):
-        return jsonify({'error': 'Please provide a valid email address'}), 400
-
-    is_strong, msg = validate_password_strength(password)
-    if not is_strong:
-        return jsonify({'error': msg}), 400
-
-    try:
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO users (username, password_hash, email, role)
-                VALUES (?, ?, ?, ?)
-            ''', (username, generate_password_hash(password), email, 'staff'))
-            conn.commit()
-            audit_logger.info(f"API_USER_REGISTERED: username='{username}', ip='{request.remote_addr}'")
-
-        return jsonify({
-            'success': True,
-            'message': 'Account created successfully',
-            'user': {
-                'username': username,
-                'email': email,
-                'role': 'staff'
-            }
-        }), 201
-    except sqlite3.IntegrityError as e:
-        if 'username' in str(e).lower():
-            return jsonify({'error': 'Username already exists'}), 409
-        else:
-            return jsonify({'error': 'Email already exists'}), 409
+    """API endpoint for user registration - disabled, users must be created by admin"""
+    return jsonify({'error': 'Public registration is disabled. Please contact an administrator.'}), 403
 
 @app.route('/api/auth/me', methods=['GET'])
 @login_required
@@ -1405,9 +1362,9 @@ def api_get_current_user():
             return jsonify(dict(user)), 200
         return jsonify({'error': 'User not found'}), 404
 
-@app.route('/api/auth/change-password', methods=['POST'])
+@app.route('/api/auth/change-password', methods=['POST', 'OPTIONS'])
 @login_required
-@limiter.limit("3 per minute")
+@limiter.limit("3 per minute", methods=["POST"])
 @csrf.exempt
 def api_change_password():
     """API endpoint to change password (authenticated users)"""
@@ -1446,8 +1403,8 @@ def api_change_password():
             logger.warning(f"API failed password change attempt for user: {session['username']}, ip: {request.remote_addr}")
             return jsonify({'error': 'Current password is incorrect'}), 401
 
-@app.route('/api/auth/forgot-password', methods=['POST'])
-@limiter.limit("3 per minute")
+@app.route('/api/auth/forgot-password', methods=['POST', 'OPTIONS'])
+@limiter.limit("3 per minute", methods=["POST"])
 @csrf.exempt
 def api_forgot_password():
     """API endpoint to reset password using username and email verification"""
@@ -1586,9 +1543,9 @@ def api_search_books():
 
         return jsonify([dict(book) for book in books])
 
-@app.route('/api/books', methods=['POST'])
+@app.route('/api/books', methods=['POST', 'OPTIONS'])
 @login_required
-@limiter.limit("30 per minute")
+@limiter.limit("30 per minute", methods=["POST"])
 def api_create_book():
     """API endpoint to create a book"""
     data = request.get_json()
@@ -1844,9 +1801,9 @@ def api_search_members():
 
         return jsonify([dict(member) for member in members])
 
-@app.route('/api/members', methods=['POST'])
+@app.route('/api/members', methods=['POST', 'OPTIONS'])
 @login_required
-@limiter.limit("30 per minute")
+@limiter.limit("30 per minute", methods=["POST"])
 def api_create_member():
     """API endpoint to create a member"""
     data = request.get_json()
@@ -2051,9 +2008,9 @@ def api_get_transaction(transaction_id):
             return jsonify(dict(transaction))
         return jsonify({'error': 'Transaction not found'}), 404
 
-@app.route('/api/transactions/issue', methods=['POST'])
+@app.route('/api/transactions/issue', methods=['POST', 'OPTIONS'])
 @login_required
-@limiter.limit("30 per minute")
+@limiter.limit("30 per minute", methods=["POST"])
 def api_issue_book():
     """API endpoint to issue a book"""
     data = request.get_json()
@@ -2129,9 +2086,9 @@ def api_issue_book():
         }
     }), 201
 
-@app.route('/api/transactions/<int:transaction_id>/return', methods=['POST'])
+@app.route('/api/transactions/<int:transaction_id>/return', methods=['POST', 'OPTIONS'])
 @login_required
-@limiter.limit("30 per minute")
+@limiter.limit("30 per minute", methods=["POST"])
 def api_return_book(transaction_id):
     """API endpoint to return a book"""
     data = request.get_json()
@@ -2331,9 +2288,9 @@ def api_get_messages(user_id):
             'current_user_id': current_user_id
         })
 
-@app.route('/api/chat/messages', methods=['POST'])
+@app.route('/api/chat/messages', methods=['POST', 'OPTIONS'])
 @login_required
-@limiter.limit("60 per minute")
+@limiter.limit("60 per minute", methods=["POST"])
 def api_send_message():
     """Send a message to another user"""
     data = request.get_json()
@@ -2727,9 +2684,9 @@ def api_get_user(user_id):
             return jsonify({'success': True, 'user': dict(user)})
         return jsonify({'error': 'User not found'}), 404
 
-@app.route('/api/admin/users', methods=['POST'])
+@app.route('/api/admin/users', methods=['POST', 'OPTIONS'])
 @admin_required
-@limiter.limit("10 per minute")
+@limiter.limit("10 per minute", methods=["POST"])
 @csrf.exempt
 def api_create_user():
     """API endpoint to create a user (admin only)"""
