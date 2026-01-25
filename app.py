@@ -266,6 +266,12 @@ def after_request(response):
 def handle_exception(e):
     """Log unhandled exceptions"""
     logger.exception(f"Unhandled exception: {str(e)}")
+
+    # Return JSON for API routes
+    if request.path.startswith('/api/'):
+        status_code = getattr(e, 'code', 500)
+        return jsonify({'error': 'An unexpected error occurred'}), status_code
+
     flash('An unexpected error occurred. Please try again.', 'error')
     if 'user_id' in session:
         return redirect(url_for('index'))
@@ -2413,9 +2419,11 @@ def api_get_fines_summary():
             'pending_overdue_count': pending_fines
         })
 
+# Initialize database on module load (for gunicorn)
+init_db()
+
 if __name__ == '__main__':
     logger.info("Starting Library Management System...")
-    init_db()
 
     # Use environment variable for debug mode, default to False for security
     debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
