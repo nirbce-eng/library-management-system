@@ -49,12 +49,22 @@ Content-Type: application/x-www-form-urlencoded
 current_password=oldpass&new_password=newpass&confirm_password=newpass
 ```
 
-### Forgot Password
+### Forgot Password (Request Reset Link)
 ```http
 POST /forgot-password
 Content-Type: application/x-www-form-urlencoded
 
-username=admin&email=admin@library.com&new_password=newpass&confirm_password=newpass
+email=admin@library.com
+```
+A password reset link will be sent to the email if the account exists.
+
+### Reset Password (Use Token)
+```http
+GET /reset-password/<token>
+POST /reset-password/<token>
+Content-Type: application/x-www-form-urlencoded
+
+new_password=newpass&confirm_password=newpass
 ```
 
 ---
@@ -65,13 +75,14 @@ username=admin&email=admin@library.com&new_password=newpass&confirm_password=new
 
 ### Quick Reference - All API Endpoints
 
-#### Authentication APIs (6 endpoints)
+#### Authentication APIs (7 endpoints)
 - POST `/api/auth/login` - Login with JSON
 - POST `/api/auth/logout` - Logout with JSON
 - POST `/api/auth/register` - Register with JSON
 - GET `/api/auth/me` - Get current user
 - POST `/api/auth/change-password` - Change password (authenticated)
-- POST `/api/auth/forgot-password` - Reset password via username+email
+- POST `/api/auth/forgot-password` - Request password reset token
+- POST `/api/auth/reset-password` - Reset password with token
 
 #### User Management APIs (5 endpoints, Admin Only)
 - GET `/api/admin/users` - List all users

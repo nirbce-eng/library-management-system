@@ -142,6 +142,14 @@ def validate_password_strength(password):
         return False, "Password must contain at least one number"
     return True, "Password is strong"
 
+def generate_reset_token():
+    """Generate a cryptographically secure password reset token"""
+    return secrets.token_urlsafe(32)
+
+def get_token_expiry(minutes=30):
+    """Get token expiry timestamp (default 30 minutes from now)"""
+    return datetime.now() + timedelta(minutes=minutes)
+
 def sanitize_search_query(query, max_length=100):
     """Sanitize search query to prevent SQL wildcard abuse"""
     if not query:
@@ -399,9 +407,21 @@ def init_db():
                 password_hash TEXT NOT NULL,
                 email TEXT UNIQUE NOT NULL,
                 role TEXT DEFAULT 'staff',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reset_token TEXT,
+                reset_token_expiry TIMESTAMP
             )
         ''')
+
+        # Add reset token columns if they don't exist (for existing databases)
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN reset_token TEXT')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN reset_token_expiry TIMESTAMP')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         # API tokens table for mobile app authentication
         cursor.execute('''
@@ -635,48 +655,98 @@ def change_password():
 @app.route('/forgot-password', methods=['GET', 'POST'])
 @limiter.limit("3 per minute", methods=["POST"])
 def forgot_password():
-    """Reset password using username and email verification"""
+    """Request password reset - generates token and sends email"""
     if 'user_id' in session:
         return redirect(url_for('index'))
 
     if request.method == 'POST':
-        username = sanitize_string(request.form.get('username', ''), 20)
         email = sanitize_string(request.form.get('email', ''), 100).lower()
-        new_password = request.form.get('new_password', '')
-        confirm_password = request.form.get('confirm_password', '')
 
-        if new_password != confirm_password:
-            flash('Passwords do not match.', 'error')
-            return render_template('forgot_password.html')
-
-        is_strong, msg = validate_password_strength(new_password)
-        if not is_strong:
-            flash(msg, 'error')
+        if not email or not validate_email(email):
+            flash('Please enter a valid email address.', 'error')
             return render_template('forgot_password.html')
 
         with get_db() as conn:
             cursor = conn.cursor()
             user = cursor.execute(
-                'SELECT * FROM users WHERE username = ? AND email = ?',
-                (username, email)
+                'SELECT * FROM users WHERE email = ?',
+                (email,)
             ).fetchone()
 
             if user:
+                # Generate secure token and set expiry
+                token = generate_reset_token()
+                expiry = get_token_expiry(30)  # 30 minutes
+
                 cursor.execute(
-                    'UPDATE users SET password_hash = ? WHERE id = ?',
-                    (generate_password_hash(new_password), user['id'])
+                    'UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?',
+                    (token, expiry, user['id'])
                 )
-                # Invalidate all API tokens for this user on password reset
-                cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
                 conn.commit()
-                audit_logger.info(f"PASSWORD_RESET: username='{username}', ip='{request.remote_addr}'")
-                flash('Password reset successfully! Please sign in with your new password.', 'success')
-                return redirect(url_for('login'))
-            else:
-                logger.warning(f"Failed password reset attempt, ip: {request.remote_addr}")
-                flash('No account found with that username and email combination.', 'error')
+
+                # Generate reset URL
+                reset_url = url_for('reset_password', token=token, _external=True)
+
+                # Log the reset link (in production, send via email)
+                logger.info(f"PASSWORD_RESET_REQUESTED: email='{email}', reset_url='{reset_url}'")
+                audit_logger.info(f"PASSWORD_RESET_REQUESTED: email='{email}', ip='{request.remote_addr}'")
+
+                # TODO: Send email with reset_url
+                # send_email(user['email'], 'Password Reset', f'Click here to reset: {reset_url}')
+
+            # Always show same message to prevent user enumeration
+            flash('If an account exists with that email, you will receive a password reset link.', 'success')
+            return redirect(url_for('login'))
 
     return render_template('forgot_password.html')
+
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+@limiter.limit("5 per minute", methods=["POST"])
+def reset_password(token):
+    """Reset password using valid token"""
+    if 'user_id' in session:
+        return redirect(url_for('index'))
+
+    # Validate token
+    with get_db() as conn:
+        cursor = conn.cursor()
+        user = cursor.execute(
+            'SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > ?',
+            (token, datetime.now())
+        ).fetchone()
+
+        if not user:
+            flash('Invalid or expired reset link. Please request a new one.', 'error')
+            return redirect(url_for('forgot_password'))
+
+        if request.method == 'POST':
+            new_password = request.form.get('new_password', '')
+            confirm_password = request.form.get('confirm_password', '')
+
+            if new_password != confirm_password:
+                flash('Passwords do not match.', 'error')
+                return render_template('reset_password.html', token=token)
+
+            is_strong, msg = validate_password_strength(new_password)
+            if not is_strong:
+                flash(msg, 'error')
+                return render_template('reset_password.html', token=token)
+
+            # Update password and invalidate token
+            cursor.execute(
+                'UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
+                (generate_password_hash(new_password), user['id'])
+            )
+            # Invalidate all API tokens for this user on password reset
+            cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
+            conn.commit()
+
+            audit_logger.info(f"PASSWORD_RESET_COMPLETED: username='{user['username']}', ip='{request.remote_addr}'")
+            flash('Password reset successfully! Please sign in with your new password.', 'success')
+            return redirect(url_for('login'))
+
+        return render_template('reset_password.html', token=token)
 
 # Routes
 @app.route('/')
@@ -1408,18 +1478,69 @@ def api_change_password():
 @limiter.limit("3 per minute", methods=["POST"])
 @csrf.exempt
 def api_forgot_password():
-    """API endpoint to reset password using username and email verification"""
+    """API endpoint to request password reset - generates token and returns it (for email sending)"""
     data = request.get_json()
 
     if not data:
         return jsonify({'error': 'Request body required'}), 400
 
-    username = sanitize_string(data.get('username', ''), 20)
     email = sanitize_string(data.get('email', ''), 100).lower()
+
+    if not email or not validate_email(email):
+        return jsonify({'error': 'Valid email is required'}), 400
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        user = cursor.execute(
+            'SELECT * FROM users WHERE email = ?',
+            (email,)
+        ).fetchone()
+
+        if user:
+            # Generate secure token and set expiry
+            token = generate_reset_token()
+            expiry = get_token_expiry(30)  # 30 minutes
+
+            cursor.execute(
+                'UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?',
+                (token, expiry, user['id'])
+            )
+            conn.commit()
+
+            logger.info(f"API_PASSWORD_RESET_REQUESTED: email='{email}'")
+            audit_logger.info(f"API_PASSWORD_RESET_REQUESTED: email='{email}', ip='{request.remote_addr}'")
+
+            # TODO: In production, send email instead of returning token
+            # For now, return token for testing/development
+            return jsonify({
+                'success': True,
+                'message': 'If an account exists with that email, a reset token has been generated.',
+                'token': token,  # Remove in production - send via email instead
+                'expires_in_minutes': 30
+            }), 200
+
+    # Always return success to prevent user enumeration
+    return jsonify({
+        'success': True,
+        'message': 'If an account exists with that email, a reset token has been generated.'
+    }), 200
+
+
+@app.route('/api/auth/reset-password', methods=['POST', 'OPTIONS'])
+@limiter.limit("5 per minute", methods=["POST"])
+@csrf.exempt
+def api_reset_password():
+    """API endpoint to reset password using valid token"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    token = data.get('token', '')
     new_password = data.get('new_password', '')
 
-    if not username or not email or not new_password:
-        return jsonify({'error': 'Username, email, and new password are required'}), 400
+    if not token or not new_password:
+        return jsonify({'error': 'Token and new password are required'}), 400
 
     is_strong, msg = validate_password_strength(new_password)
     if not is_strong:
@@ -1428,23 +1549,25 @@ def api_forgot_password():
     with get_db() as conn:
         cursor = conn.cursor()
         user = cursor.execute(
-            'SELECT * FROM users WHERE username = ? AND email = ?',
-            (username, email)
+            'SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > ?',
+            (token, datetime.now())
         ).fetchone()
 
-        if user:
-            cursor.execute(
-                'UPDATE users SET password_hash = ? WHERE id = ?',
-                (generate_password_hash(new_password), user['id'])
-            )
-            # Invalidate all API tokens for this user on password reset
-            cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
-            conn.commit()
-            audit_logger.info(f"API_PASSWORD_RESET: username='{username}', ip='{request.remote_addr}'")
-            return jsonify({'success': True, 'message': 'Password reset successfully'}), 200
-        else:
-            logger.warning(f"API failed password reset attempt, ip: {request.remote_addr}")
-            return jsonify({'error': 'No account found with that username and email combination'}), 404
+        if not user:
+            logger.warning(f"API invalid/expired reset token attempt, ip: {request.remote_addr}")
+            return jsonify({'error': 'Invalid or expired reset token'}), 400
+
+        # Update password and invalidate token
+        cursor.execute(
+            'UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
+            (generate_password_hash(new_password), user['id'])
+        )
+        # Invalidate all API tokens for this user on password reset
+        cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
+        conn.commit()
+
+        audit_logger.info(f"API_PASSWORD_RESET_COMPLETED: username='{user['username']}', ip='{request.remote_addr}'")
+        return jsonify({'success': True, 'message': 'Password reset successfully'}), 200
 
 # Dashboard API
 @app.route('/api/dashboard')

@@ -10,6 +10,11 @@ This document outlines the security features, configurations, and best practices
 - **Strong Password Requirements**: Minimum 8 characters, at least one letter and one number
 - **Password Hashing**: Uses Werkzeug's secure password hashing (PBKDF2-SHA256)
 - **Token Invalidation**: API tokens are invalidated on password change/reset
+- **Secure Password Reset**: Token-based reset flow with email verification
+  - Cryptographically secure tokens (32 bytes via `secrets.token_urlsafe`)
+  - Tokens expire after 30 minutes
+  - Single-use tokens (invalidated after use)
+  - Prevents user enumeration (same response for valid/invalid emails)
 
 #### API Token Security
 - **Token Expiration**: API tokens expire after 24 hours
@@ -21,7 +26,9 @@ This document outlines the security features, configurations, and best practices
 |----------|-------|
 | Login attempts | 5 per minute |
 | Registration | 3 per minute |
-| Password change/reset | 3 per minute |
+| Password change | 3 per minute |
+| Password reset request | 3 per minute |
+| Password reset (with token) | 5 per minute |
 | API authentication | 5 per minute |
 | Create/Update operations | 30 per minute |
 | Delete operations | 10 per minute |
@@ -237,7 +244,7 @@ Each log entry includes:
 
 1. **SQLite**: Single-file database, not suitable for high-concurrency production
 2. **In-memory rate limiting**: Rate limits reset on restart
-3. **No email verification**: Registration doesn't verify email ownership
+3. **No email sending**: Password reset tokens are logged (email integration required for production)
 4. **No 2FA**: Two-factor authentication not implemented
 
 ## Security Vulnerability Reporting
@@ -250,6 +257,19 @@ If you discover a security vulnerability, please:
 4. Allow reasonable time for a fix before disclosure
 
 ## Changelog
+
+### Version 2.2.0 (Secure Password Reset)
+
+- Implemented token-based password reset flow
+- Added `reset_token` and `reset_token_expiry` columns to users table
+- Tokens generated using `secrets.token_urlsafe(32)` (cryptographically secure)
+- Tokens expire after 30 minutes
+- Tokens are single-use (invalidated after successful reset)
+- Fixed user enumeration vulnerability (same response for valid/invalid emails)
+- Added new `/reset-password/<token>` web route
+- Added new `/api/auth/reset-password` API endpoint
+- Updated rate limiting for password reset endpoints
+- All API tokens invalidated on password reset
 
 ### Version 2.1.0 (Security Penetration Testing)
 

@@ -177,42 +177,99 @@ class TestAPIChangePassword:
 
 
 class TestAPIForgotPassword:
-    """Tests for POST /api/auth/forgot-password"""
+    """Tests for POST /api/auth/forgot-password (request reset token)"""
 
-    def test_forgot_password_success(self, client):
-        """Test successful password reset."""
+    def test_forgot_password_request_token_success(self, client):
+        """Test successful password reset token request."""
         response = client.post('/api/auth/forgot-password', json={
-            'username': 'teststaff',
-            'email': 'teststaff@test.com',
-            'new_password': 'ResetPass123!'
+            'email': 'teststaff@test.com'
+        })
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['success'] is True
+        assert 'token' in data  # Token returned for testing
+
+    def test_forgot_password_nonexistent_email_no_enumeration(self, client):
+        """Test that nonexistent email still returns success (prevents enumeration)."""
+        response = client.post('/api/auth/forgot-password', json={
+            'email': 'nonexistent@test.com'
+        })
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['success'] is True
+        # No token returned for nonexistent email
+        assert 'token' not in data or data.get('token') is None
+
+    def test_forgot_password_invalid_email_format(self, client):
+        """Test password reset with invalid email format."""
+        response = client.post('/api/auth/forgot-password', json={
+            'email': 'invalid-email'
+        })
+        assert response.status_code == 400
+
+
+class TestAPIResetPassword:
+    """Tests for POST /api/auth/reset-password (use token to reset)"""
+
+    def test_reset_password_with_valid_token(self, client):
+        """Test successful password reset using valid token."""
+        # First, request a reset token
+        response = client.post('/api/auth/forgot-password', json={
+            'email': 'teststaff@test.com'
+        })
+        assert response.status_code == 200
+        token = response.get_json()['token']
+
+        # Now use the token to reset password
+        response = client.post('/api/auth/reset-password', json={
+            'token': token,
+            'new_password': 'NewSecurePass123!'
         })
         assert response.status_code == 200
         data = response.get_json()
         assert data['success'] is True
 
-    def test_forgot_password_wrong_email(self, client):
-        """Test password reset with wrong email."""
-        response = client.post('/api/auth/forgot-password', json={
-            'username': 'teststaff',
-            'email': 'wrong@test.com',
-            'new_password': 'ResetPass123!'
+    def test_reset_password_with_invalid_token(self, client):
+        """Test password reset with invalid token."""
+        response = client.post('/api/auth/reset-password', json={
+            'token': 'invalid-token-12345',
+            'new_password': 'NewSecurePass123!'
         })
-        assert response.status_code == 404
+        assert response.status_code == 400
 
-    def test_forgot_password_wrong_username(self, client):
-        """Test password reset with wrong username."""
-        response = client.post('/api/auth/forgot-password', json={
-            'username': 'wronguser',
-            'email': 'teststaff@test.com',
-            'new_password': 'ResetPass123!'
-        })
-        assert response.status_code == 404
-
-    def test_forgot_password_weak_password(self, client):
+    def test_reset_password_weak_password(self, client):
         """Test password reset with weak password."""
+        # First, request a reset token
         response = client.post('/api/auth/forgot-password', json={
-            'username': 'teststaff',
-            'email': 'teststaff@test.com',
+            'email': 'teststaff@test.com'
+        })
+        token = response.get_json()['token']
+
+        # Try to reset with weak password
+        response = client.post('/api/auth/reset-password', json={
+            'token': token,
             'new_password': '123'
+        })
+        assert response.status_code == 400
+
+    def test_reset_password_token_single_use(self, client):
+        """Test that token can only be used once."""
+        # First, request a reset token
+        response = client.post('/api/auth/forgot-password', json={
+            'email': 'teststaff@test.com'
+        })
+        token = response.get_json()['token']
+
+        # Use the token
+        response = client.post('/api/auth/reset-password', json={
+            'token': token,
+            'new_password': 'NewSecurePass123!'
+        })
+        assert response.status_code == 200
+
+        # Try to use the same token again
+        response = client.post('/api/auth/reset-password', json={
+            'token': token,
+            'new_password': 'AnotherPass456!'
         })
         assert response.status_code == 400

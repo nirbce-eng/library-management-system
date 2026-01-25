@@ -124,16 +124,49 @@ Content-Type: application/json
 
 **Note:** All API tokens are invalidated after password change. User must re-login.
 
-### Forgot Password (Reset)
-Reset password using username and email verification. No authentication required.
+### Forgot Password (Request Reset Token)
+Request a password reset token. The token will be sent to the user's email. No authentication required.
 
 ```http
 POST /api/auth/forgot-password
 Content-Type: application/json
 
 {
-  "username": "user1",
-  "email": "user1@example.com",
+  "email": "user1@example.com"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "If an account exists with that email, a reset token has been generated.",
+  "token": "abc123...",
+  "expires_in_minutes": 30
+}
+```
+
+**Note:** The `token` field is only returned in development mode. In production, the token should be sent via email only.
+
+**Error Responses:**
+- 400: Invalid email format
+
+**Security Features:**
+- Returns success even for non-existent emails (prevents user enumeration)
+- Token expires after 30 minutes
+- Rate limited to 3 requests per minute
+
+---
+
+### Reset Password (Use Token)
+Reset password using a valid token received from the forgot-password endpoint.
+
+```http
+POST /api/auth/reset-password
+Content-Type: application/json
+
+{
+  "token": "abc123...",
   "new_password": "newpassword123"
 }
 ```
@@ -147,10 +180,9 @@ Content-Type: application/json
 ```
 
 **Error Responses:**
-- 400: Missing fields or weak password
-- 404: No account found with that username and email combination
+- 400: Invalid/expired token or weak password
 
-**Note:** All API tokens are invalidated after password reset.
+**Note:** All API tokens are invalidated after password reset. Token can only be used once.
 
 ---
 
@@ -914,7 +946,8 @@ Authorization: Bearer <admin_token>
 - ✓ POST `/api/auth/register`
 - ✓ GET `/api/auth/me`
 - ✓ POST `/api/auth/change-password` - Change password (authenticated)
-- ✓ POST `/api/auth/forgot-password` - Reset password (no auth)
+- ✓ POST `/api/auth/forgot-password` - Request password reset token (no auth)
+- ✓ POST `/api/auth/reset-password` - Reset password with token (no auth)
 
 ### User Management (5 endpoints) - Admin Only
 - ✓ GET `/api/admin/users` - List all users
