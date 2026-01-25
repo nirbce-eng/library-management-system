@@ -143,6 +143,7 @@
                 <li><a href="{{ url_for('transactions') }}" class="nav-link {% if request.endpoint in ['transactions', 'issue_book'] %}active{% endif %}">Transactions</a></li>
                 <li><a href="{{ url_for('chat') }}" class="nav-link {% if request.endpoint == 'chat' %}active{% endif %}">Chat</a></li>
                 {% if session.get('role') == 'admin' %}
+                <li><a href="{{ url_for('admin_users') }}" class="nav-link {% if request.endpoint in ['admin_users', 'admin_add_user', 'admin_edit_user'] %}active{% endif %}">Users</a></li>
                 <li><a href="{{ url_for('ledger') }}" class="nav-link {% if request.endpoint == 'ledger' %}active{% endif %}">Ledger</a></li>
                 {% endif %}
             </ul>

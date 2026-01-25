@@ -65,11 +65,20 @@ username=admin&email=admin@library.com&new_password=newpass&confirm_password=new
 
 ### Quick Reference - All API Endpoints
 
-#### Authentication APIs (4 endpoints)
+#### Authentication APIs (6 endpoints)
 - POST `/api/auth/login` - Login with JSON
 - POST `/api/auth/logout` - Logout with JSON
 - POST `/api/auth/register` - Register with JSON
 - GET `/api/auth/me` - Get current user
+- POST `/api/auth/change-password` - Change password (authenticated)
+- POST `/api/auth/forgot-password` - Reset password via username+email
+
+#### User Management APIs (5 endpoints, Admin Only)
+- GET `/api/admin/users` - List all users
+- GET `/api/admin/users/<id>` - Get single user
+- POST `/api/admin/users` - Create user
+- PUT `/api/admin/users/<id>` - Update user
+- DELETE `/api/admin/users/<id>` - Delete user
 
 #### Dashboard API (1 endpoint)
 - GET `/api/dashboard` - Get library statistics
@@ -247,6 +256,32 @@ return_date (required)
 
 **Fine Calculation:**
 - If `return_date > due_date`: fine = overdue_days * $1.00
+
+### User Management (Admin Only)
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/admin/users` | List all users |
+| GET | `/admin/users?search=query` | Search users |
+| GET | `/admin/users?role=admin` | Filter by role |
+| GET | `/admin/users/add` | Add user form |
+| POST | `/admin/users/add` | Create user |
+| GET | `/admin/users/edit/<id>` | Edit user form |
+| POST | `/admin/users/edit/<id>` | Update user |
+| POST | `/admin/users/delete/<id>` | Delete user |
+
+**Add/Edit User Form Fields:**
+```
+username (required, unique, 3-20 alphanumeric or underscore)
+email (required, unique)
+password (required for add, optional for edit)
+confirm_password (must match password)
+role (admin or staff)
+```
+
+**Security Notes:**
+- Admin cannot delete their own account
+- Admin cannot change their own role
+- Password change invalidates all API tokens
 
 ---
 
@@ -453,5 +488,5 @@ For production deployment:
 
 ---
 
-**API Version:** 1.1
-**Last Updated:** January 21, 2026
+**API Version:** 1.2
+**Last Updated:** January 25, 2026

@@ -1405,6 +1405,89 @@ def api_get_current_user():
             return jsonify(dict(user)), 200
         return jsonify({'error': 'User not found'}), 404
 
+@app.route('/api/auth/change-password', methods=['POST'])
+@login_required
+@limiter.limit("3 per minute")
+@csrf.exempt
+def api_change_password():
+    """API endpoint to change password (authenticated users)"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    current_password = data.get('current_password', '')
+    new_password = data.get('new_password', '')
+
+    if not current_password or not new_password:
+        return jsonify({'error': 'Current password and new password are required'}), 400
+
+    is_strong, msg = validate_password_strength(new_password)
+    if not is_strong:
+        return jsonify({'error': msg}), 400
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        user = cursor.execute(
+            'SELECT * FROM users WHERE id = ?', (session['user_id'],)
+        ).fetchone()
+
+        if user and check_password_hash(user['password_hash'], current_password):
+            cursor.execute(
+                'UPDATE users SET password_hash = ? WHERE id = ?',
+                (generate_password_hash(new_password), session['user_id'])
+            )
+            # Invalidate all API tokens for this user on password change
+            cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (session['user_id'],))
+            conn.commit()
+            audit_logger.info(f"API_PASSWORD_CHANGED: username='{session['username']}', ip='{request.remote_addr}'")
+            return jsonify({'success': True, 'message': 'Password changed successfully'}), 200
+        else:
+            logger.warning(f"API failed password change attempt for user: {session['username']}, ip: {request.remote_addr}")
+            return jsonify({'error': 'Current password is incorrect'}), 401
+
+@app.route('/api/auth/forgot-password', methods=['POST'])
+@limiter.limit("3 per minute")
+@csrf.exempt
+def api_forgot_password():
+    """API endpoint to reset password using username and email verification"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    username = sanitize_string(data.get('username', ''), 20)
+    email = sanitize_string(data.get('email', ''), 100).lower()
+    new_password = data.get('new_password', '')
+
+    if not username or not email or not new_password:
+        return jsonify({'error': 'Username, email, and new password are required'}), 400
+
+    is_strong, msg = validate_password_strength(new_password)
+    if not is_strong:
+        return jsonify({'error': msg}), 400
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        user = cursor.execute(
+            'SELECT * FROM users WHERE username = ? AND email = ?',
+            (username, email)
+        ).fetchone()
+
+        if user:
+            cursor.execute(
+                'UPDATE users SET password_hash = ? WHERE id = ?',
+                (generate_password_hash(new_password), user['id'])
+            )
+            # Invalidate all API tokens for this user on password reset
+            cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user['id'],))
+            conn.commit()
+            audit_logger.info(f"API_PASSWORD_RESET: username='{username}', ip='{request.remote_addr}'")
+            return jsonify({'success': True, 'message': 'Password reset successfully'}), 200
+        else:
+            logger.warning(f"API failed password reset attempt, ip: {request.remote_addr}")
+            return jsonify({'error': 'No account found with that username and email combination'}), 404
+
 # Dashboard API
 @app.route('/api/dashboard')
 @login_required
@@ -2417,6 +2500,392 @@ def api_get_fines_summary():
             'month_fines': month_fines,
             'total_fines': total_fines,
             'pending_overdue_count': pending_fines
+        })
+
+# =============================================================================
+# ADMIN USER MANAGEMENT ROUTES
+# =============================================================================
+
+@app.route('/admin/users')
+@admin_required
+def admin_users():
+    """List all users (admin only)"""
+    search = request.args.get('search', '')
+    role_filter = request.args.get('role', '')
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        query = 'SELECT id, username, email, role, created_at FROM users WHERE 1=1'
+        params = []
+
+        if search:
+            safe_search = sanitize_search_query(search)
+            query += ' AND (username LIKE ? ESCAPE "\\" OR email LIKE ? ESCAPE "\\")'
+            params.extend([f'%{safe_search}%', f'%{safe_search}%'])
+
+        if role_filter:
+            query += ' AND role = ?'
+            params.append(role_filter)
+
+        query += ' ORDER BY created_at DESC'
+
+        users = cursor.execute(query, params).fetchall()
+
+    return render_template('admin_users.html', users=users, search=search, selected_role=role_filter)
+
+@app.route('/admin/users/add', methods=['GET', 'POST'])
+@admin_required
+def admin_add_user():
+    """Add a new user (admin only)"""
+    if request.method == 'POST':
+        username = sanitize_string(request.form.get('username', ''), 20)
+        email = sanitize_string(request.form.get('email', ''), 100).lower()
+        password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
+        role = request.form.get('role', 'staff')
+
+        # Validation
+        if not validate_username(username):
+            flash('Username must be 3-20 alphanumeric characters or underscores.', 'error')
+            return render_template('admin_add_user.html')
+
+        if not validate_email(email):
+            flash('Please enter a valid email address.', 'error')
+            return render_template('admin_add_user.html')
+
+        if password != confirm_password:
+            flash('Passwords do not match.', 'error')
+            return render_template('admin_add_user.html')
+
+        is_strong, msg = validate_password_strength(password)
+        if not is_strong:
+            flash(msg, 'error')
+            return render_template('admin_add_user.html')
+
+        if role not in ['admin', 'staff']:
+            flash('Invalid role selected.', 'error')
+            return render_template('admin_add_user.html')
+
+        try:
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO users (username, password_hash, email, role)
+                    VALUES (?, ?, ?, ?)
+                ''', (username, generate_password_hash(password), email, role))
+                conn.commit()
+                audit_logger.info(f"ADMIN_USER_CREATED: username='{username}', role='{role}', by='{session['username']}', ip='{request.remote_addr}'")
+            flash(f'User "{username}" created successfully!', 'success')
+            return redirect(url_for('admin_users'))
+        except sqlite3.IntegrityError as e:
+            if 'username' in str(e).lower():
+                flash('Username already exists.', 'error')
+            else:
+                flash('Email already exists.', 'error')
+            logger.warning(f"Admin user creation failed for username={username}: integrity error")
+
+    return render_template('admin_add_user.html')
+
+@app.route('/admin/users/edit/<int:user_id>', methods=['GET', 'POST'])
+@admin_required
+def admin_edit_user(user_id):
+    """Edit a user (admin only)"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        if request.method == 'POST':
+            username = sanitize_string(request.form.get('username', ''), 20)
+            email = sanitize_string(request.form.get('email', ''), 100).lower()
+            password = request.form.get('password', '')
+            confirm_password = request.form.get('confirm_password', '')
+            role = request.form.get('role', 'staff')
+
+            # Validation
+            if not validate_username(username):
+                flash('Username must be 3-20 alphanumeric characters or underscores.', 'error')
+                return redirect(url_for('admin_edit_user', user_id=user_id))
+
+            if not validate_email(email):
+                flash('Please enter a valid email address.', 'error')
+                return redirect(url_for('admin_edit_user', user_id=user_id))
+
+            if role not in ['admin', 'staff']:
+                flash('Invalid role selected.', 'error')
+                return redirect(url_for('admin_edit_user', user_id=user_id))
+
+            # Prevent admin from demoting themselves
+            if user_id == session['user_id'] and role != 'admin':
+                flash('You cannot change your own role.', 'error')
+                return redirect(url_for('admin_edit_user', user_id=user_id))
+
+            # Password validation if provided
+            if password:
+                if password != confirm_password:
+                    flash('Passwords do not match.', 'error')
+                    return redirect(url_for('admin_edit_user', user_id=user_id))
+
+                is_strong, msg = validate_password_strength(password)
+                if not is_strong:
+                    flash(msg, 'error')
+                    return redirect(url_for('admin_edit_user', user_id=user_id))
+
+            try:
+                if password:
+                    cursor.execute('''
+                        UPDATE users SET username = ?, email = ?, password_hash = ?, role = ?
+                        WHERE id = ?
+                    ''', (username, email, generate_password_hash(password), role, user_id))
+                    # Invalidate tokens on password change
+                    cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user_id,))
+                else:
+                    cursor.execute('''
+                        UPDATE users SET username = ?, email = ?, role = ?
+                        WHERE id = ?
+                    ''', (username, email, role, user_id))
+                conn.commit()
+                audit_logger.info(f"ADMIN_USER_UPDATED: user_id={user_id}, username='{username}', by='{session['username']}', ip='{request.remote_addr}'")
+                flash(f'User "{username}" updated successfully!', 'success')
+                return redirect(url_for('admin_users'))
+            except sqlite3.IntegrityError as e:
+                if 'username' in str(e).lower():
+                    flash('Username already exists.', 'error')
+                else:
+                    flash('Email already exists.', 'error')
+                logger.warning(f"Admin user update failed for user_id={user_id}: integrity error")
+
+        user = cursor.execute(
+            'SELECT id, username, email, role, created_at FROM users WHERE id = ?',
+            (user_id,)
+        ).fetchone()
+
+        if not user:
+            flash('User not found.', 'error')
+            return redirect(url_for('admin_users'))
+
+    return render_template('admin_edit_user.html', user=user)
+
+@app.route('/admin/users/delete/<int:user_id>', methods=['POST'])
+@admin_required
+def admin_delete_user(user_id):
+    """Delete a user (admin only)"""
+    # Prevent admin from deleting themselves
+    if user_id == session['user_id']:
+        flash('You cannot delete your own account.', 'error')
+        return redirect(url_for('admin_users'))
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if user exists
+        user = cursor.execute('SELECT username FROM users WHERE id = ?', (user_id,)).fetchone()
+        if not user:
+            flash('User not found.', 'error')
+            return redirect(url_for('admin_users'))
+
+        # Delete user's API tokens first
+        cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user_id,))
+        # Delete user's chat messages
+        cursor.execute('DELETE FROM chat_messages WHERE sender_id = ? OR receiver_id = ?', (user_id, user_id))
+        # Delete user
+        cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+        conn.commit()
+
+        audit_logger.info(f"ADMIN_USER_DELETED: user_id={user_id}, username='{user['username']}', by='{session['username']}', ip='{request.remote_addr}'")
+        flash(f'User "{user["username"]}" deleted successfully!', 'success')
+
+    return redirect(url_for('admin_users'))
+
+# API endpoints for user management (admin only)
+@app.route('/api/admin/users')
+@admin_required
+def api_list_users():
+    """API endpoint to list all users (admin only)"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        users = cursor.execute('''
+            SELECT id, username, email, role, created_at FROM users
+            ORDER BY created_at DESC
+        ''').fetchall()
+
+        return jsonify({
+            'success': True,
+            'users': [dict(user) for user in users]
+        })
+
+@app.route('/api/admin/users/<int:user_id>')
+@admin_required
+def api_get_user(user_id):
+    """API endpoint to get a single user (admin only)"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        user = cursor.execute('''
+            SELECT id, username, email, role, created_at FROM users WHERE id = ?
+        ''', (user_id,)).fetchone()
+
+        if user:
+            return jsonify({'success': True, 'user': dict(user)})
+        return jsonify({'error': 'User not found'}), 404
+
+@app.route('/api/admin/users', methods=['POST'])
+@admin_required
+@limiter.limit("10 per minute")
+@csrf.exempt
+def api_create_user():
+    """API endpoint to create a user (admin only)"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    username = sanitize_string(data.get('username', ''), 20)
+    email = sanitize_string(data.get('email', ''), 100).lower()
+    password = data.get('password', '')
+    role = data.get('role', 'staff')
+
+    if not validate_username(username):
+        return jsonify({'error': 'Username must be 3-20 alphanumeric characters or underscores'}), 400
+
+    if not validate_email(email):
+        return jsonify({'error': 'Please provide a valid email address'}), 400
+
+    is_strong, msg = validate_password_strength(password)
+    if not is_strong:
+        return jsonify({'error': msg}), 400
+
+    if role not in ['admin', 'staff']:
+        return jsonify({'error': 'Role must be admin or staff'}), 400
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO users (username, password_hash, email, role)
+                VALUES (?, ?, ?, ?)
+            ''', (username, generate_password_hash(password), email, role))
+            user_id = cursor.lastrowid
+            conn.commit()
+            audit_logger.info(f"API_ADMIN_USER_CREATED: username='{username}', role='{role}', by='{session['username']}', ip='{request.remote_addr}'")
+
+        return jsonify({
+            'success': True,
+            'message': 'User created successfully',
+            'user': {
+                'id': user_id,
+                'username': username,
+                'email': email,
+                'role': role
+            }
+        }), 201
+    except sqlite3.IntegrityError as e:
+        if 'username' in str(e).lower():
+            return jsonify({'error': 'Username already exists'}), 409
+        else:
+            return jsonify({'error': 'Email already exists'}), 409
+
+@app.route('/api/admin/users/<int:user_id>', methods=['PUT'])
+@admin_required
+@limiter.limit("10 per minute")
+@csrf.exempt
+def api_update_user(user_id):
+    """API endpoint to update a user (admin only)"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    # Prevent admin from demoting themselves
+    if user_id == session['user_id'] and data.get('role') and data.get('role') != 'admin':
+        return jsonify({'error': 'You cannot change your own role'}), 403
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Check if user exists
+        user = cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        username = sanitize_string(data.get('username', user['username']), 20)
+        email = sanitize_string(data.get('email', user['email']), 100).lower()
+        role = data.get('role', user['role'])
+        password = data.get('password', '')
+
+        if not validate_username(username):
+            return jsonify({'error': 'Username must be 3-20 alphanumeric characters or underscores'}), 400
+
+        if not validate_email(email):
+            return jsonify({'error': 'Please provide a valid email address'}), 400
+
+        if role not in ['admin', 'staff']:
+            return jsonify({'error': 'Role must be admin or staff'}), 400
+
+        if password:
+            is_strong, msg = validate_password_strength(password)
+            if not is_strong:
+                return jsonify({'error': msg}), 400
+
+        try:
+            if password:
+                cursor.execute('''
+                    UPDATE users SET username = ?, email = ?, password_hash = ?, role = ?
+                    WHERE id = ?
+                ''', (username, email, generate_password_hash(password), role, user_id))
+                cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user_id,))
+            else:
+                cursor.execute('''
+                    UPDATE users SET username = ?, email = ?, role = ?
+                    WHERE id = ?
+                ''', (username, email, role, user_id))
+            conn.commit()
+            audit_logger.info(f"API_ADMIN_USER_UPDATED: user_id={user_id}, by='{session['username']}', ip='{request.remote_addr}'")
+
+            return jsonify({
+                'success': True,
+                'message': 'User updated successfully',
+                'user': {
+                    'id': user_id,
+                    'username': username,
+                    'email': email,
+                    'role': role
+                }
+            })
+        except sqlite3.IntegrityError as e:
+            if 'username' in str(e).lower():
+                return jsonify({'error': 'Username already exists'}), 409
+            else:
+                return jsonify({'error': 'Email already exists'}), 409
+
+@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+@admin_required
+@limiter.limit("10 per minute")
+@csrf.exempt
+def api_delete_user(user_id):
+    """API endpoint to delete a user (admin only)"""
+    # Prevent admin from deleting themselves
+    if user_id == session['user_id']:
+        return jsonify({'error': 'You cannot delete your own account'}), 403
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        user = cursor.execute('SELECT username FROM users WHERE id = ?', (user_id,)).fetchone()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Delete user's API tokens
+        cursor.execute('DELETE FROM api_tokens WHERE user_id = ?', (user_id,))
+        # Delete user's chat messages
+        cursor.execute('DELETE FROM chat_messages WHERE sender_id = ? OR receiver_id = ?', (user_id, user_id))
+        # Delete user
+        cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+        conn.commit()
+
+        audit_logger.info(f"API_ADMIN_USER_DELETED: user_id={user_id}, username='{user['username']}', by='{session['username']}', ip='{request.remote_addr}'")
+
+        return jsonify({
+            'success': True,
+            'message': f'User "{user["username"]}" deleted successfully'
         })
 
 # Initialize database on module load (for gunicorn)

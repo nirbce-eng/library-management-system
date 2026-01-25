@@ -96,6 +96,62 @@ GET /api/auth/me
 }
 ```
 
+### Change Password
+Change password for the authenticated user. Requires current password verification.
+
+```http
+POST /api/auth/change-password
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "current_password": "oldpassword123",
+  "new_password": "newpassword456"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "Password changed successfully"
+}
+```
+
+**Error Responses:**
+- 400: Weak password (min 8 chars, 1 letter, 1 number)
+- 401: Current password is incorrect
+
+**Note:** All API tokens are invalidated after password change. User must re-login.
+
+### Forgot Password (Reset)
+Reset password using username and email verification. No authentication required.
+
+```http
+POST /api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "username": "user1",
+  "email": "user1@example.com",
+  "new_password": "newpassword123"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "Password reset successfully"
+}
+```
+
+**Error Responses:**
+- 400: Missing fields or weak password
+- 404: No account found with that username and email combination
+
+**Note:** All API tokens are invalidated after password reset.
+
 ---
 
 ## Dashboard
@@ -663,6 +719,140 @@ Authorization: Bearer <token>
 
 ---
 
+## User Management (Admin Only)
+
+User management endpoints are restricted to users with `role: "admin"`.
+
+### List Users
+```http
+GET /api/admin/users
+Authorization: Bearer <admin_token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "email": "admin@library.com",
+      "role": "admin",
+      "created_at": "2026-01-20 10:00:00"
+    },
+    {
+      "id": 2,
+      "username": "staff1",
+      "email": "staff1@library.com",
+      "role": "staff",
+      "created_at": "2026-01-21 09:00:00"
+    }
+  ]
+}
+```
+
+### Get Single User
+```http
+GET /api/admin/users/2
+Authorization: Bearer <admin_token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "user": {
+    "id": 2,
+    "username": "staff1",
+    "email": "staff1@library.com",
+    "role": "staff",
+    "created_at": "2026-01-21 09:00:00"
+  }
+}
+```
+
+### Create User
+```http
+POST /api/admin/users
+Authorization: Bearer <admin_token>
+Content-Type: application/json
+
+{
+  "username": "newstaff",
+  "email": "newstaff@library.com",
+  "password": "Password123!",
+  "role": "staff"
+}
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "message": "User created successfully",
+  "user": {
+    "id": 3,
+    "username": "newstaff",
+    "email": "newstaff@library.com",
+    "role": "staff"
+  }
+}
+```
+
+### Update User
+```http
+PUT /api/admin/users/3
+Authorization: Bearer <admin_token>
+Content-Type: application/json
+
+{
+  "username": "updatedstaff",
+  "email": "updated@library.com",
+  "role": "admin",
+  "password": "NewPassword123!"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "User updated successfully",
+  "user": {
+    "id": 3,
+    "username": "updatedstaff",
+    "email": "updated@library.com",
+    "role": "admin"
+  }
+}
+```
+
+**Notes:**
+- Password field is optional (omit to keep current password)
+- Admin cannot change their own role
+- Password change invalidates user's API tokens
+
+### Delete User
+```http
+DELETE /api/admin/users/3
+Authorization: Bearer <admin_token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "User \"updatedstaff\" deleted successfully"
+}
+```
+
+**Notes:**
+- Admin cannot delete their own account
+- Deleting a user also removes their API tokens and chat messages
+
+---
+
 ## Error Responses
 
 ### 400 Bad Request
@@ -718,11 +908,20 @@ Authorization: Bearer <token>
 
 ## Complete API Summary
 
-### Authentication (4 endpoints)
+### Authentication (6 endpoints)
 - ✓ POST `/api/auth/login`
 - ✓ POST `/api/auth/logout`
 - ✓ POST `/api/auth/register`
 - ✓ GET `/api/auth/me`
+- ✓ POST `/api/auth/change-password` - Change password (authenticated)
+- ✓ POST `/api/auth/forgot-password` - Reset password (no auth)
+
+### User Management (5 endpoints) - Admin Only
+- ✓ GET `/api/admin/users` - List all users
+- ✓ GET `/api/admin/users/<id>` - Get single user
+- ✓ POST `/api/admin/users` - Create user
+- ✓ PUT `/api/admin/users/<id>` - Update user
+- ✓ DELETE `/api/admin/users/<id>` - Delete user
 
 ### Dashboard (1 endpoint)
 - ✓ GET `/api/dashboard`
@@ -749,16 +948,20 @@ Authorization: Bearer <token>
 - ✓ POST `/api/transactions/issue` - Issue book
 - ✓ POST `/api/transactions/<id>/return` - Return book
 
-### Admin Chat (5 endpoints) - Admin Only
-- ✓ GET `/api/chat/admins` - List admin users
+### Chat (5 endpoints) - All Users
+- ✓ GET `/api/chat/users` - List chat users
 - ✓ GET `/api/chat/conversations` - Get conversations
 - ✓ GET `/api/chat/messages/<user_id>` - Get messages with user
 - ✓ POST `/api/chat/messages` - Send message
 - ✓ GET `/api/chat/unread-count` - Get unread count
 
-**Total: 29 API endpoints**
+### Ledger (2 endpoints) - Admin Only
+- ✓ GET `/api/ledger/fines` - Get all fines
+- ✓ GET `/api/ledger/summary` - Get fines summary
+
+**Total: 38 API endpoints**
 
 ---
 
-**Version:** 2.1
-**Last Updated:** January 23, 2026
+**Version:** 2.2
+**Last Updated:** January 25, 2026
