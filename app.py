@@ -1334,6 +1334,7 @@ def api_login():
 
 @app.route('/api/auth/logout', methods=['POST', 'OPTIONS'])
 @login_required
+@csrf.exempt
 def api_logout():
     """API endpoint for user logout"""
     username = session.get('username', 'unknown')
@@ -1546,6 +1547,7 @@ def api_search_books():
 @app.route('/api/books', methods=['POST', 'OPTIONS'])
 @login_required
 @limiter.limit("30 per minute", methods=["POST"])
+@csrf.exempt
 def api_create_book():
     """API endpoint to create a book"""
     data = request.get_json()
@@ -1804,6 +1806,7 @@ def api_search_members():
 @app.route('/api/members', methods=['POST', 'OPTIONS'])
 @login_required
 @limiter.limit("30 per minute", methods=["POST"])
+@csrf.exempt
 def api_create_member():
     """API endpoint to create a member"""
     data = request.get_json()
@@ -2011,6 +2014,7 @@ def api_get_transaction(transaction_id):
 @app.route('/api/transactions/issue', methods=['POST', 'OPTIONS'])
 @login_required
 @limiter.limit("30 per minute", methods=["POST"])
+@csrf.exempt
 def api_issue_book():
     """API endpoint to issue a book"""
     data = request.get_json()
@@ -2089,6 +2093,7 @@ def api_issue_book():
 @app.route('/api/transactions/<int:transaction_id>/return', methods=['POST', 'OPTIONS'])
 @login_required
 @limiter.limit("30 per minute", methods=["POST"])
+@csrf.exempt
 def api_return_book(transaction_id):
     """API endpoint to return a book"""
     data = request.get_json()
@@ -2291,6 +2296,7 @@ def api_get_messages(user_id):
 @app.route('/api/chat/messages', methods=['POST', 'OPTIONS'])
 @login_required
 @limiter.limit("60 per minute", methods=["POST"])
+@csrf.exempt
 def api_send_message():
     """Send a message to another user"""
     data = request.get_json()
