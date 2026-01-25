@@ -16,7 +16,7 @@ services:
       # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY environment variable is required}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      - ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080
       # Enable HSTS when running behind HTTPS reverse proxy
       - ENABLE_HSTS=${ENABLE_HSTS:-false}
     restart: unless-stopped
